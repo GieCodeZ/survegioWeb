@@ -19,8 +19,13 @@ declare module 'vue-router/auto-routes' {
    */
   export interface RouteNamedMap {
     '$error': RouteRecordInfo<'$error', '/:error(.*)', { error: ParamValue<true> }, { error: ParamValue<false> }>,
+    'academic-terms': RouteRecordInfo<'academic-terms', '/academic-terms', Record<never, never>, Record<never, never>>,
     'access-control': RouteRecordInfo<'access-control', '/access-control', Record<never, never>, Record<never, never>>,
+    'class-sections': RouteRecordInfo<'class-sections', '/class-sections', Record<never, never>, Record<never, never>>,
+    'classes': RouteRecordInfo<'classes', '/classes', Record<never, never>, Record<never, never>>,
+    'courses': RouteRecordInfo<'courses', '/courses', Record<never, never>, Record<never, never>>,
     'dashboard': RouteRecordInfo<'dashboard', '/dashboard', Record<never, never>, Record<never, never>>,
+    'departments': RouteRecordInfo<'departments', '/departments', Record<never, never>, Record<never, never>>,
     'forgot-password': RouteRecordInfo<'forgot-password', '/forgot-password', Record<never, never>, Record<never, never>>,
     'landing': RouteRecordInfo<'landing', '/landing', Record<never, never>, Record<never, never>>,
     'login': RouteRecordInfo<'login', '/login', Record<never, never>, Record<never, never>>,
@@ -46,6 +51,10 @@ declare module 'vue-router/auto-routes' {
     'pages-pricing': RouteRecordInfo<'pages-pricing', '/pages/pricing', Record<never, never>, Record<never, never>>,
     'pages-typography': RouteRecordInfo<'pages-typography', '/pages/typography', Record<never, never>, Record<never, never>>,
     'pages-user-profile-tab': RouteRecordInfo<'pages-user-profile-tab', '/pages/user-profile/:tab', { tab: ParamValue<true> }, { tab: ParamValue<false> }>,
+    'programs': RouteRecordInfo<'programs', '/programs', Record<never, never>, Record<never, never>>,
     'register': RouteRecordInfo<'register', '/register', Record<never, never>, Record<never, never>>,
+    'students': RouteRecordInfo<'students', '/students', Record<never, never>, Record<never, never>>,
+    'surveys': RouteRecordInfo<'surveys', '/surveys', Record<never, never>, Record<never, never>>,
+    'teachers': RouteRecordInfo<'teachers', '/teachers', Record<never, never>, Record<never, never>>,
   }
 }

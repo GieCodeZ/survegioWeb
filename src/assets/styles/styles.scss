@@ -1,1 +1,9 @@
 // Write your overrides
+
+// Logo sizing
+.app-logo {
+  svg {
+    width: 100%;
+    height: 100%;
+  }
+}

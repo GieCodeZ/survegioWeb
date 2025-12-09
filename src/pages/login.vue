@@ -1,25 +1,7 @@
 <script setup lang="ts">
-import { VForm } from 'vuetify/components/VForm'
-import AuthProvider from '@/views/pages/authentication/AuthProvider.vue'
-import { themeConfig } from '@themeConfig'
-
-import tree1 from '@images/misc/tree1.png'
-import authV2LoginIllustrationBorderedDark from '@images/pages/auth-v2-login-illustration-bordered-dark.png'
-import authV2LoginIllustrationBorderedLight from '@images/pages/auth-v2-login-illustration-bordered-light.png'
-import authV2LoginIllustrationDark from '@images/pages/auth-v2-login-illustration-dark.png'
-import authV2LoginIllustrationLight from '@images/pages/auth-v2-login-illustration-light.png'
-import authV2MaskDark from '@images/pages/mask-v2-dark.png'
-import authV2MaskLight from '@images/pages/mask-v2-light.png'
 import { VNodeRenderer } from '@layouts/components/VNodeRenderer'
-
-const authThemeImg = useGenerateImageVariant(
-  authV2LoginIllustrationLight,
-  authV2LoginIllustrationDark,
-  authV2LoginIllustrationBorderedLight,
-  authV2LoginIllustrationBorderedDark,
-  true)
-
-const authThemeMask = useGenerateImageVariant(authV2MaskLight, authV2MaskDark)
+import { themeConfig } from '@themeConfig'
+import { VForm } from 'vuetify/components/VForm'
 
 definePage({
   meta: {
@@ -42,42 +24,117 @@ const errors = ref<Record<string, string | undefined>>({
 
 const refVForm = ref<VForm>()
 
+// Load saved email from localStorage if "Remember me" was checked
+const savedEmail = localStorage.getItem('rememberedEmail')
+
 const credentials = ref({
-  email: 'admin@demo.com',
-  password: 'admin',
+  email: savedEmail || '',
+  password: '',
 })
 
-const rememberMe = ref(false)
+const rememberMe = ref(!!savedEmail)
+
+const isLoading = ref(false)
 
 const login = async () => {
+  isLoading.value = true
+  errors.value = { email: undefined, password: undefined }
+
   try {
-    const res = await $api('/auth/login', {
+    // Authenticate with Directus (using ofetch directly to avoid sending old tokens)
+    const { ofetch } = await import('ofetch')
+    const baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8061'
+
+    const authRes = await ofetch('/auth/login', {
+      baseURL,
       method: 'POST',
       body: {
         email: credentials.value.email,
         password: credentials.value.password,
       },
-      onResponseError({ response }) {
-        errors.value = response._data.errors
+    })
+
+    const { access_token, refresh_token } = authRes.data
+
+    // Cookie options based on "Remember me"
+    // If remember me: 7 days, otherwise: session cookie (expires when browser closes)
+    const cookieOptions = rememberMe.value
+      ? { maxAge: 60 * 60 * 24 * 7 } // 7 days in seconds
+      : { maxAge: 0 } // Session cookie
+
+    // Store remember me preference for token refresh
+    useCookie('rememberMe').value = rememberMe.value ? 'true' : 'false'
+
+    // Save or remove email for autofill
+    if (rememberMe.value)
+      localStorage.setItem('rememberedEmail', credentials.value.email)
+    else
+      localStorage.removeItem('rememberedEmail')
+
+    // Store tokens
+    useCookie('accessToken', cookieOptions).value = access_token
+    useCookie('refreshToken', cookieOptions).value = refresh_token
+
+    // Get user data from Directus (pass token directly to avoid timing issues)
+    const userRes = await ofetch('/users/me', {
+      baseURL,
+      params: {
+        fields: ['id', 'email', 'first_name', 'last_name', 'avatar', 'role.id', 'role.name'],
+      },
+      headers: {
+        Authorization: `Bearer ${access_token}`,
       },
     })
 
-    const { accessToken, userData, userAbilityRules } = res
+    const userData = userRes.data
 
-    useCookie('userAbilityRules').value = userAbilityRules
+    // Define ability rules based on role
+    const roleName = userData.role?.name?.toLowerCase() || ''
+    let userAbilityRules: { action: string; subject: string }[] = []
+
+    if (roleName === 'administrator') {
+      userAbilityRules = [
+        { action: 'manage', subject: 'all' },
+      ]
+    }
+    else {
+      // Default permissions for other roles
+      userAbilityRules = [
+        { action: 'read', subject: 'Auth' },
+        { action: 'read', subject: 'Dashboard' },
+      ]
+    }
+
+    // Store user data and ability rules
+    useCookie('userData', cookieOptions).value = userData
+    useCookie('userAbilityRules', cookieOptions).value = userAbilityRules
     ability.update(userAbilityRules)
 
-    useCookie('userData').value = userData
-    useCookie('accessToken').value = accessToken
-
-    // Redirect to `to` query if exist or redirect to dashboard
-    // ❗ nextTick is required to wait for DOM updates and later redirect
+    // Redirect to dashboard
     await nextTick(() => {
       router.replace(route.query.to ? String(route.query.to) : '/dashboard')
     })
   }
-  catch (err) {
+  catch (err: any) {
     console.error(err)
+
+    // Handle Directus error responses
+    if (err.data?.errors) {
+      const directusError = err.data.errors[0]
+
+      if (directusError.extensions?.code === 'INVALID_CREDENTIALS') {
+        errors.value.email = 'Invalid email or password'
+      }
+      else {
+        errors.value.email = directusError.message || 'Login failed'
+      }
+    }
+    else {
+      errors.value.email = 'An error occurred. Please try again.'
+    }
+  }
+  finally {
+    isLoading.value = false
   }
 }
 
@@ -91,168 +148,167 @@ const onSubmit = () => {
 </script>
 
 <template>
-  <RouterLink to="/">
-    <div class="auth-logo d-flex align-center gap-x-3">
-      <VNodeRenderer :nodes="themeConfig.app.logo" />
-      <h1 class="auth-title">
-        {{ themeConfig.app.title }}
-      </h1>
-    </div>
-  </RouterLink>
-
-  <VRow
-    no-gutters
-    class="auth-wrapper"
-  >
-    <VCol
-      md="8"
-      class="d-none d-md-flex position-relative"
-    >
-      <div class="d-flex align-center justify-end w-100 h-100 pa-10 pe-0">
-        <VImg
-          max-width="797"
-          :src="authThemeImg"
-          class="auth-illustration"
-        />
-      </div>
-
-      <img
-        class="auth-footer-mask"
-        height="360"
-        :src="authThemeMask"
+  <div class="login-page">
+    <VRow no-gutters class="auth-wrapper">
+      <!-- Left Side - Yellow Background -->
+      <VCol
+        md="7"
+        class="d-none d-md-flex"
       >
-
-      <VImg
-        :src="tree1"
-        alt="tree image"
-        height="190"
-        width="90"
-        class="auth-footer-tree"
-      />
-    </VCol>
-
-    <VCol
-      cols="12"
-      md="4"
-      class="auth-card-v2 d-flex align-center justify-center"
-      style="background-color: rgb(var(--v-theme-surface));"
-    >
-      <VCard
-        flat
-        :max-width="500"
-        class="mt-12 mt-sm-0 pa-4"
-      >
-        <VCardText>
-          <h4 class="text-h4 mb-1">
-            Welcome to <span class="text-capitalize">{{ themeConfig.app.title }}!</span> 👋🏻
-          </h4>
-          <p class="mb-0">
-            Please sign-in to your account and start the adventure
+        <div class="left-section d-flex flex-column justify-center align-center w-100 h-100 pa-8">
+          <div class="logo-large d-flex justify-center mb-6">
+            <VNodeRenderer :nodes="themeConfig.app.logo" />
+          </div>
+          <h1 class="text-h2 font-weight-bold text-primary mb-4 text-center">Welcome to Survegio</h1>
+          <p class="text-h6 text-primary text-center" style="opacity: 0.8; max-width: 400px;">
+            Your trusted evaluation system — fast, secure, and easy to use.
           </p>
-        </VCardText>
-        <VCardText>
-          <VAlert
-            color="primary"
-            variant="tonal"
-          >
-            <p class="text-caption mb-2 text-primary">
-              Admin Email: <strong>admin@demo.com</strong> / Pass: <strong>admin</strong>
+        </div>
+      </VCol>
+
+      <!-- Right Side - Login Form -->
+      <VCol
+        cols="12"
+        md="5"
+        class="d-flex align-center justify-center"
+        style="background-color: rgb(var(--v-theme-surface));"
+      >
+        <VCard
+          flat
+          :max-width="450"
+          class="pa-6 pa-sm-8 w-100"
+        >
+          <!-- Mobile Logo -->
+          <div class="d-flex d-md-none align-center justify-center gap-x-3 mb-6">
+            <VNodeRenderer :nodes="themeConfig.app.logo" />
+            <div class="d-flex flex-column">
+              <span class="text-h5 font-weight-bold text-primary">{{ themeConfig.app.title }}</span>
+              <span class="text-caption text-medium-emphasis">Performance Evaluation</span>
+            </div>
+          </div>
+
+          <VCardText class="pa-0">
+            <h4 class="text-h4 mb-1 text-primary">
+              Login
+            </h4>
+            <p class="text-body-1 text-medium-emphasis mb-6">
+              Enter your credentials to proceed.
             </p>
-            <p class="text-caption mb-0 text-primary">
-              Client Email: <strong>client@demo.com</strong> / Pass: <strong>client</strong>
-            </p>
-          </VAlert>
-        </VCardText>
+          </VCardText>
 
-        <VCardText>
-          <VForm
-            ref="refVForm"
-            @submit.prevent="onSubmit"
-          >
-            <VRow>
-              <!-- email -->
-              <VCol cols="12">
-                <VTextField
-                  v-model="credentials.email"
-                  label="Email"
-                  placeholder="johndoe@email.com"
-                  type="email"
-                  autofocus
-                  :rules="[requiredValidator, emailValidator]"
-                  :error-messages="errors.email"
-                />
-              </VCol>
-
-              <!-- password -->
-              <VCol cols="12">
-                <VTextField
-                  v-model="credentials.password"
-                  label="Password"
-                  placeholder="············"
-                  :rules="[requiredValidator]"
-                  :type="isPasswordVisible ? 'text' : 'password'"
-                  :error-messages="errors.password"
-                  :append-inner-icon="isPasswordVisible ? 'ri-eye-off-line' : 'ri-eye-line'"
-                  @click:append-inner="isPasswordVisible = !isPasswordVisible"
-                />
-
-                <div class="d-flex align-center flex-wrap justify-space-between my-5 gap-2">
-                  <VCheckbox
-                    v-model="rememberMe"
-                    label="Remember me"
+          <VCardText class="pa-0">
+            <VForm
+              ref="refVForm"
+              @submit.prevent="onSubmit"
+            >
+              <VRow>
+                <!-- email -->
+                <VCol cols="12">
+                  <VTextField
+                    v-model="credentials.email"
+                    label="Email"
+                    placeholder="Enter your email"
+                    type="email"
+                    autofocus
+                    :rules="[requiredValidator, emailValidator]"
+                    :error-messages="errors.email"
+                    variant="outlined"
                   />
-                  <RouterLink
-                    class="text-primary"
-                    :to="{ name: 'forgot-password' }"
+                </VCol>
+
+                <!-- password -->
+                <VCol cols="12">
+                  <VTextField
+                    v-model="credentials.password"
+                    label="Password"
+                    placeholder="Enter your password"
+                    :rules="[requiredValidator]"
+                    :type="isPasswordVisible ? 'text' : 'password'"
+                    :error-messages="errors.password"
+                    :append-inner-icon="isPasswordVisible ? 'ri-eye-off-line' : 'ri-eye-line'"
+                    variant="outlined"
+                    @click:append-inner="isPasswordVisible = !isPasswordVisible"
+                  />
+
+                  <div class="d-flex align-center flex-wrap justify-space-between mt-2 mb-4">
+                    <VCheckbox
+                      v-model="rememberMe"
+                      label="Remember me"
+                      density="compact"
+                    />
+                    <RouterLink
+                      class="text-primary text-body-2"
+                      :to="{ name: 'forgot-password' }"
+                    >
+                      Forgot Password?
+                    </RouterLink>
+                  </div>
+
+                  <VBtn
+                    block
+                    type="submit"
+                    color="primary"
+                    size="large"
+                    :loading="isLoading"
+                    :disabled="isLoading"
                   >
-                    Forgot Password?
+                    Login
+                  </VBtn>
+                </VCol>
+
+                <!-- back to home -->
+                <VCol
+                  cols="12"
+                  class="text-center"
+                >
+                  <RouterLink
+                    class="text-primary text-body-2"
+                    :to="{ name: 'landing' }"
+                  >
+                    <VIcon icon="ri-arrow-left-line" size="16" class="me-1" />
+                    Back to Home
                   </RouterLink>
-                </div>
-
-                <VBtn
-                  block
-                  type="submit"
-                >
-                  Login
-                </VBtn>
-              </VCol>
-
-              <!-- create account -->
-              <VCol
-                cols="12"
-                class="text-center text-base"
-              >
-                <span>New on our platform?</span> <RouterLink
-                  class="text-primary d-inline-block"
-                  :to="{ name: 'register' }"
-                >
-                  Create an account
-                </RouterLink>
-              </VCol>
-              <VCol
-                cols="12"
-                class="d-flex align-center"
-              >
-                <VDivider />
-                <span class="mx-4">or</span>
-                <VDivider />
-              </VCol>
-
-              <!-- auth providers -->
-              <VCol
-                cols="12"
-                class="text-center"
-              >
-                <AuthProvider />
-              </VCol>
-            </VRow>
-          </VForm>
-        </VCardText>
-      </VCard>
-    </VCol>
-  </VRow>
+                </VCol>
+              </VRow>
+            </VForm>
+          </VCardText>
+        </VCard>
+      </VCol>
+    </VRow>
+  </div>
 </template>
 
-<style lang="scss">
-@use "@core/scss/template/pages/page-auth.scss";
+<style lang="scss" scoped>
+.login-page {
+  min-height: 100vh;
+}
+
+.auth-wrapper {
+  min-height: 100vh;
+}
+
+.left-section {
+  background-color: rgb(var(--v-theme-secondary));
+}
+
+.logo-large {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+
+  :deep(.app-logo) {
+    width: 150px !important;
+    height: 150px !important;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+
+    svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+  }
+}
 </style>

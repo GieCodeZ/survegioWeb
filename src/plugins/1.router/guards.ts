@@ -4,13 +4,16 @@ import { canNavigate } from '@layouts/plugins/casl'
 export const setupGuards = (router: _RouterTyped<RouteNamedMap & { [key: string]: any }>) => {
   // 👉 router.beforeEach
   // Docs: https://router.vuejs.org/guide/advanced/navigation-guards.html#global-before-guards
-  router.beforeEach(to => {
+  router.beforeEach((to, from, next) => {
     /*
      * If it's a public route, continue navigation. This kind of pages are allowed to visited by login & non-login users. Basically, without any restrictions.
      * Examples of public routes are, 404, under maintenance, etc.
      */
-    if (to.meta.public)
+    if (to.meta.public) {
+      next()
+
       return
+    }
 
     /**
      * Check if user is logged in by checking if token & user data exists in local storage
@@ -24,24 +27,36 @@ export const setupGuards = (router: _RouterTyped<RouteNamedMap & { [key: string]
       (WARN: Don't allow executing further by return statement because next code will check for permissions)
      */
     if (to.meta.unauthenticatedOnly) {
-      if (isLoggedIn)
-        return { name: 'dashboard' }
-      else
-        return undefined
+      if (isLoggedIn) {
+        // Use replace to prevent back button from returning to login
+        router.replace({ name: 'dashboard' })
+
+        return
+      }
+      else {
+        next()
+
+        return
+      }
     }
 
     if (!canNavigate(to) && to.matched.length) {
-      /* eslint-disable indent */
-      return isLoggedIn
-        ? { name: 'not-authorized' }
-        : {
-            name: 'login',
-            query: {
-              ...to.query,
-              to: to.fullPath !== '/' ? to.path : undefined,
-            },
-          }
-      /* eslint-enable indent */
+      if (isLoggedIn) {
+        next({ name: 'not-authorized' })
+      }
+      else {
+        next({
+          name: 'login',
+          query: {
+            ...to.query,
+            to: to.fullPath !== '/' ? to.path : undefined,
+          },
+        })
+      }
+
+      return
     }
+
+    next()
   })
 }
