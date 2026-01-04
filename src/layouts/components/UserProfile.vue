@@ -20,7 +20,7 @@ const userRole = computed(() => {
   return userData.value?.role?.name || 'User'
 })
 
-const logout = async () => {
+const logout = () => {
   // Remove tokens from cookies
   useCookie('accessToken').value = null
   useCookie('refreshToken').value = null
@@ -37,8 +37,8 @@ const logout = async () => {
   // Reset ability to initial ability
   ability.update([])
 
-  // Redirect to login page
-  await router.push('/login')
+  // Hard redirect to login page to ensure clean state
+  window.location.href = '/login'
 }
 </script>
 

@@ -10,28 +10,17 @@ import UserProfile from '@/layouts/components/UserProfile.vue'
 // @layouts plugin
 import { VerticalNavLayout } from '@layouts'
 
-// State to force re-render when role changes
-const userRole = ref('')
+// Store cookie ref once to ensure proper reactivity
+const userDataCookie = useCookie<any>('userData')
 
-// Get navigation items based on user role
+// Get navigation items based on user role - directly computed from cookie
 const navItems = computed(() => {
-  // Access userRole to create reactive dependency
-  const role = userRole.value
+  const userData = userDataCookie.value
 
-  if (role === 'dean') {
-    return deanNavItems
+  // Return empty array if not authenticated (prevents nav showing during logout)
+  if (!userData) {
+    return []
   }
-  else if (role === 'student') {
-    return studentNavItems
-  }
-
-  // Default to admin navigation
-  return adminNavItems
-})
-
-// Update role from cookie
-const updateRole = () => {
-  const userData = useCookie('userData').value as any
 
   // Handle different role formats
   let role = ''
@@ -49,22 +38,26 @@ const updateRole = () => {
     role = userData.userRole.toLowerCase()
   }
 
-  userRole.value = role
-}
+  if (role === 'dean') {
+    return deanNavItems
+  }
+  else if (role === 'student') {
+    return studentNavItems
+  }
 
-// Update role on mount and watch for changes
-onMounted(() => {
-  updateRole()
+  // Default to admin navigation
+  return adminNavItems
 })
 
-// Watch for cookie changes
-watch(() => useCookie('userData').value, () => {
-  updateRole()
-}, { deep: true })
+// Check if authenticated for conditional rendering
+const isAuthenticated = computed(() => !!userDataCookie.value)
 </script>
 
 <template>
-  <VerticalNavLayout :nav-items="navItems">
+  <VerticalNavLayout
+    v-if="isAuthenticated"
+    :nav-items="navItems"
+  >
     <!-- 👉 navbar -->
     <template #navbar="{ toggleVerticalOverlayNavActive }">
       <div class="d-flex h-100 align-center">
@@ -90,4 +83,9 @@ watch(() => useCookie('userData').value, () => {
       <Footer />
     </template>
   </VerticalNavLayout>
+
+  <!-- Fallback when not authenticated (during logout transition) -->
+  <div v-else class="layout-wrapper">
+    <slot />
+  </div>
 </template>
