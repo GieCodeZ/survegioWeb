@@ -1,4 +1,19 @@
 {
+  "Academic": "Academic",
+  "Programs": "Programs",
+  "Courses": "Courses",
+  "Class Sections": "Class Sections",
+  "Academic Terms": "Academic Terms",
+  "Class & Department": "Class & Department",
+  "Departments": "Departments",
+  "School Offices": "School Offices",
+  "Class List": "Class List",
+  "Users": "Users",
+  "Students": "Students",
+  "Teachers": "Teachers",
+  "Survey": "Survey",
+  "Student Evaluation": "Student Evaluation",
+  "Dean Evaluation": "Dean Evaluation",
   "UI Elements": "UI Elements",
   "Forms & Tables": "Forms & Tables",
   "Pages": "Pages",
@@ -170,6 +185,9 @@
     "noDataText": "No data available",
     "close": "Close",
     "open": "open",
+    "dataIterator": {
+      "loadingText": "Loading items..."
+    },
     "dataFooter": {
       "itemsPerPageText": "Items per page:",
       "itemsPerPageAll": "All",

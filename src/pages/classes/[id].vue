@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { $api } from '@/utils/api'
+import { YEAR_LEVEL_OPTIONS } from '@/utils/constants'
 
 definePage({
   meta: {
     action: 'read',
     subject: 'classes',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -53,6 +55,7 @@ interface ClassItem {
   student_id?: any[]
   department_id: any[]
   teacher_id?: number | Teacher | null
+  year_level?: string
 }
 
 const route = useRoute()
@@ -143,6 +146,14 @@ const getCourseName = (): string => {
   if (typeof classData.value.course_id === 'object' && classData.value.course_id !== null)
     return classData.value.course_id.courseName
   return ''
+}
+
+// Get year level display
+const getYearLevel = (): string => {
+  if (!classData.value?.year_level)
+    return '-'
+  const option = YEAR_LEVEL_OPTIONS.find(o => o.value === classData.value?.year_level)
+  return option?.title || '-'
 }
 
 // Get department display
@@ -256,6 +267,30 @@ const getDepartmentCode = (): string => {
   return ''
 }
 
+// Get teacher name in "First Last" format for export
+const getTeacherNameForExport = (): string => {
+  if (!classData.value)
+    return ''
+  if (typeof classData.value.teacher_id === 'object' && classData.value.teacher_id !== null) {
+    const teacher = classData.value.teacher_id
+    return `${teacher.first_name} ${teacher.last_name}`
+  }
+  return ''
+}
+
+// Get semester in import-compatible format (e.g., "FIRST SEMESTER 2025-2026")
+const getSemesterForExport = (): string => {
+  if (!classData.value)
+    return ''
+  if (typeof classData.value.acadTerm_id === 'object' && classData.value.acadTerm_id !== null) {
+    const term = classData.value.acadTerm_id
+    // Convert "First Semester" to "FIRST SEMESTER"
+    const semesterUpper = term.semester.toUpperCase()
+    return `${semesterUpper} ${term.schoolYear}`
+  }
+  return ''
+}
+
 // Export students to CSV
 const exportToCSV = () => {
   if (!classData.value || students.value.length === 0)
@@ -264,33 +299,38 @@ const exportToCSV = () => {
   const courseCode = getCourseCode()
   const courseName = getCourseName()
   const section = classData.value.section
-  const academicTerm = getAcademicTerm()
+  const semesterLine = getSemesterForExport()
   const deptCode = getDepartmentCode()
+  const teacherName = getTeacherNameForExport()
+  const yearLevel = classData.value.year_level || ''
 
-  // Build CSV content in the same format as import
+  // Build CSV content in the same format as import expects
   const lines: string[] = []
 
-  // Header info
-  lines.push(`${deptCode ? deptCode.toUpperCase() : 'DEPARTMENT'},,,,,,,`)
-  lines.push('CLASS LIST,,,,,,,')
-  lines.push(',,,,,,,')
-  lines.push(',,,,,,,')
-  lines.push(`${academicTerm.toUpperCase().replace(' - ', ' ')},,,,,,,`)
-  lines.push(',,,,,,,')
-  lines.push(`,${courseCode} - ${courseName},,,,,,`)
-  lines.push(`,${section},,,,,,`)
-  lines.push(',,,,,,,')
-  lines.push(',,,,,,,')
+  // Header info (9 columns to match import format)
+  lines.push(`${deptCode ? deptCode.toUpperCase() : 'DEPARTMENT'},,,,,,,,`)
+  lines.push('CLASS LIST,,,,,,,,')
+  lines.push(',,,,,,,,')
+  lines.push(',,,,,,,,')
+  lines.push(`${semesterLine},,,,,,,,`)
+  lines.push(',,,,,,,,')
+  lines.push(`,${courseCode} - ${courseName},,,,,,,`)
+  lines.push(`,${section},,,,,,,`)
+  if (teacherName) {
+    lines.push(`,${teacherName},,,,,,,`)
+  }
+  lines.push(',,,,,,,,')
+  lines.push(',,,,,,,,')
 
-  // Student table header
-  lines.push('No.,Student No.,Last Name,First Name,MI,Gender,Email,Program/Section')
+  // Student table header (9 columns)
+  lines.push('No.,Student No.,Last Name,First Name,MI,Gender,Email,Year Level,Program/Section')
 
-  // Student data
+  // Student data (9 columns)
   students.value.forEach((student: Student, index: number) => {
     const middleInitial = student.middle_name ? student.middle_name.charAt(0) : ''
     const gender = student.gender || ''
     const email = student.email || ''
-    lines.push(`${index + 1},${student.student_number},${student.last_name},${student.first_name},${middleInitial},${gender},${email},${section}`)
+    lines.push(`${index + 1},${student.student_number},${student.last_name},${student.first_name},${middleInitial},${gender},${email},${yearLevel},${section}`)
   })
 
   // Create CSV content
@@ -525,6 +565,24 @@ onMounted(() => {
                   {{ getAcademicTermStatus() }}
                 </VChip>
               </div>
+            </VCol>
+            <VCol
+              cols="12"
+              sm="6"
+              md="3"
+            >
+              <div class="text-overline text-medium-emphasis mb-1">
+                Year Level
+              </div>
+              <VChip
+                v-if="classData.year_level"
+                color="info"
+                size="small"
+                variant="tonal"
+              >
+                {{ getYearLevel() }}
+              </VChip>
+              <span v-else class="text-body-1">-</span>
             </VCol>
           </VRow>
           <VRow class="mt-4">

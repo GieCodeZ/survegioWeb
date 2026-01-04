@@ -5,6 +5,7 @@ definePage({
   meta: {
     action: 'read',
     subject: 'courses',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -23,6 +24,11 @@ const isDialogOpen = ref(false)
 const isDeleteDialogOpen = ref(false)
 const isEditing = ref(false)
 const selectedCourse = ref<Course | null>(null)
+
+// Deletion prevention state
+const isCheckingDeletion = ref(false)
+const deletionBlockedReason = ref<string | null>(null)
+const relatedClasses = ref<any[]>([])
 
 const form = ref<Course>({
   courseCode: '',
@@ -73,9 +79,40 @@ const openEditDialog = (course: Course) => {
 }
 
 // Open delete confirmation dialog
-const openDeleteDialog = (course: Course) => {
+const openDeleteDialog = async (course: Course) => {
   selectedCourse.value = course
   isDeleteDialogOpen.value = true
+  await checkCourseDeletion(course)
+}
+
+// Check if course can be deleted
+const checkCourseDeletion = async (course: Course) => {
+  if (!course.id) return
+
+  isCheckingDeletion.value = true
+  deletionBlockedReason.value = null
+  relatedClasses.value = []
+
+  try {
+    // Check for classes using this course
+    const classesRes = await $api('/items/classes', {
+      params: {
+        filter: { course_id: { _eq: course.id } },
+        fields: ['id', 'section', 'teacher_id.first_name', 'teacher_id.last_name', 'acadTerm_id.schoolYear', 'acadTerm_id.semester'],
+      },
+    })
+
+    if (classesRes.data && classesRes.data.length > 0) {
+      relatedClasses.value = classesRes.data
+      deletionBlockedReason.value = 'classes'
+    }
+  }
+  catch (error) {
+    console.error('Failed to check course deletion:', error)
+  }
+  finally {
+    isCheckingDeletion.value = false
+  }
 }
 
 // Save course (create or update)
@@ -115,6 +152,11 @@ const deleteCourse = async () => {
   if (!selectedCourse.value?.id)
     return
 
+  // Don't allow deletion if course has dependencies
+  if (deletionBlockedReason.value) {
+    return
+  }
+
   try {
     await $api(`/items/courses/${selectedCourse.value.id}`, {
       method: 'DELETE',
@@ -122,6 +164,8 @@ const deleteCourse = async () => {
 
     isDeleteDialogOpen.value = false
     selectedCourse.value = null
+    deletionBlockedReason.value = null
+    relatedClasses.value = []
     await fetchCourses()
   }
   catch (error) {
@@ -255,18 +299,69 @@ onMounted(() => {
     <!-- Delete Confirmation Dialog -->
     <VDialog
       v-model="isDeleteDialogOpen"
-      max-width="400"
+      max-width="500"
     >
       <VCard>
-        <VCardTitle class="pa-6">
+        <VCardTitle class="pa-6 d-flex align-center gap-2">
+          <VIcon icon="ri-error-warning-line" color="error" />
           Delete Course
         </VCardTitle>
 
         <VDivider />
 
         <VCardText class="pa-6">
-          Are you sure you want to delete <strong>{{ selectedCourse?.courseName }}</strong>?
-          This action cannot be undone.
+          <!-- Loading state -->
+          <div v-if="isCheckingDeletion" class="d-flex justify-center pa-4">
+            <VProgressCircular indeterminate color="primary" />
+          </div>
+
+          <template v-else>
+            <!-- Blocked: Has classes -->
+            <template v-if="deletionBlockedReason === 'classes'">
+              <VAlert
+                type="error"
+                variant="tonal"
+                class="mb-4"
+              >
+                <template #title>
+                  Cannot Delete Course
+                </template>
+                This course has {{ relatedClasses.length }} class(es) using it. Please delete or reassign the classes first.
+              </VAlert>
+
+              <p class="text-subtitle-2 mb-2">Classes using this course:</p>
+              <VList density="compact" class="mb-4">
+                <VListItem
+                  v-for="cls in relatedClasses"
+                  :key="cls.id"
+                  density="compact"
+                >
+                  <template #prepend>
+                    <VIcon icon="ri-book-line" size="small" />
+                  </template>
+                  <VListItemTitle>
+                    Section {{ cls.section }}
+                    <span v-if="cls.teacher_id">
+                      - {{ cls.teacher_id.first_name }} {{ cls.teacher_id.last_name }}
+                    </span>
+                  </VListItemTitle>
+                  <VListItemSubtitle>
+                    {{ cls.acadTerm_id?.schoolYear }} {{ cls.acadTerm_id?.semester }}
+                  </VListItemSubtitle>
+                </VListItem>
+              </VList>
+            </template>
+
+            <!-- Can delete -->
+            <template v-else>
+              <p class="mb-4">
+                Are you sure you want to delete <strong>{{ selectedCourse?.courseName }}</strong> ({{ selectedCourse?.courseCode }})?
+              </p>
+              <p class="text-error font-weight-medium mb-0">
+                This action cannot be undone.
+              </p>
+            </template>
+          </template>
         </VCardText>
 
         <VDivider />
@@ -277,9 +372,10 @@ onMounted(() => {
             variant="outlined"
             @click="isDeleteDialogOpen = false"
           >
-            Cancel
+            {{ deletionBlockedReason ? 'Close' : 'Cancel' }}
           </VBtn>
           <VBtn
+            v-if="!deletionBlockedReason && !isCheckingDeletion"
             color="error"
             @click="deleteCourse"
           >

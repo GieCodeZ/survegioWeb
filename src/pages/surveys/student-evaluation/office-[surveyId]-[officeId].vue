@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { $api } from '@/utils/api'
+import { YEAR_LEVEL_OPTIONS } from '@/utils/constants'
 
 definePage({
   meta: {
     action: 'read',
     subject: 'surveys',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -33,6 +35,7 @@ interface Student {
   first_name: string
   last_name: string
   student_number: string
+  program_id?: { id: number; programCode: string; programName: string; department_id?: { id: number; name: string } | number } | number
 }
 
 interface SurveyResponse {
@@ -41,6 +44,7 @@ interface SurveyResponse {
   student_id: Student | number
   office_id?: number
   submitted_at: string
+  year_level?: string
   answers?: SurveyAnswer[]
 }
 
@@ -98,11 +102,108 @@ const officeStats = computed(() => {
   }
 })
 
+// Computed: Responses by year level
+const responsesByYearLevel = computed(() => {
+  const stats: Record<string, {
+    yearLevel: string
+    yearLevelLabel: string
+    totalResponses: number
+    averageRating: number
+    ratingSum: number
+    ratingCount: number
+  }> = {}
+
+  for (const opt of YEAR_LEVEL_OPTIONS) {
+    stats[opt.value] = {
+      yearLevel: opt.value,
+      yearLevelLabel: opt.title,
+      totalResponses: 0,
+      averageRating: 0,
+      ratingSum: 0,
+      ratingCount: 0,
+    }
+  }
+
+  for (const response of responses.value) {
+    const yearLevel = response.year_level || ''
+    if (yearLevel && stats[yearLevel]) {
+      stats[yearLevel].totalResponses++
+      if (response.answers) {
+        for (const answer of response.answers) {
+          const numVal = parseFloat(answer.answer_value)
+          if (!isNaN(numVal) && numVal >= 1 && numVal <= 5) {
+            stats[yearLevel].ratingSum += numVal
+            stats[yearLevel].ratingCount++
+          }
+        }
+      }
+    }
+  }
+
+  for (const key of Object.keys(stats)) {
+    const stat = stats[key]
+    if (stat.ratingCount > 0) {
+      stat.averageRating = stat.ratingSum / stat.ratingCount
+    }
+  }
+
+  return Object.values(stats).filter(s => s.totalResponses > 0)
+})
+
 // Helper: Check if response style is for comments (should be shown in Comments section, not Questions)
 const isCommentStyle = (responseStyle: string): boolean => {
   if (!responseStyle) return false
   const lower = responseStyle.toLowerCase()
   return lower.includes('open') || lower.includes('comment') || lower.includes('text')
+}
+
+// Helper: Get department name from response
+const getDepartmentName = (response: SurveyResponse): string => {
+  if (!response.student_id || typeof response.student_id !== 'object') return 'Unknown'
+  const student = response.student_id as Student
+  if (!student.program_id || typeof student.program_id !== 'object') return 'Unknown'
+  const program = student.program_id
+  if (!program.department_id || typeof program.department_id !== 'object') return 'Unknown'
+  return program.department_id.name || 'Unknown'
+}
+
+// Computed: Unique departments from responses
+const uniqueDepartments = computed(() => {
+  const deptSet = new Set<string>()
+  for (const response of responses.value) {
+    const deptName = getDepartmentName(response)
+    if (deptName !== 'Unknown') {
+      deptSet.add(deptName)
+    }
+  }
+  return Array.from(deptSet).sort()
+})
+
+// Helper: Get rating for a question by department
+const getQuestionRatingByDepartment = (questionId: number, departmentName: string): number => {
+  let sum = 0
+  let count = 0
+
+  for (const response of responses.value) {
+    if (getDepartmentName(response) !== departmentName) continue
+    if (!response.answers) continue
+
+    for (const answer of response.answers) {
+      const ansQId = typeof answer.question_id === 'object'
+        ? answer.question_id.id
+        : answer.question_id
+
+      if (ansQId === questionId) {
+        const numVal = parseFloat(answer.answer_value)
+        if (!isNaN(numVal) && numVal >= 1 && numVal <= 5) {
+          sum += numVal
+          count++
+        }
+      }
+    }
+  }
+
+  return count > 0 ? sum / count : 0
 }
 
 // Computed: Question statistics (excludes Comment/Open-Ended response styles)
@@ -295,7 +396,7 @@ const fetchResponses = async () => {
             { office_id: { _eq: officeId.value } },
           ],
         },
-        fields: ['*', 'student_id.*', 'answers.*', 'answers.question_id.*'],
+        fields: ['*', 'year_level', 'student_id.*', 'student_id.program_id.*', 'student_id.program_id.department_id.*', 'answers.*', 'answers.question_id.*'],
         limit: -1,
       },
     })
@@ -403,45 +504,49 @@ const printReport = () => {
     ? `${survey.value.academic_term.semester} ${survey.value.academic_term.schoolYear}`
     : 'N/A'
 
-  // Build the question tables
-  const questionTablesHtml = (survey.value.question_group || []).map(group => {
-    const questions = group.questions || []
-    if (questions.length === 0) return ''
+  // Build single unified question table (exclude comment-style groups)
+  const allQuestionRows = (survey.value.question_group || [])
+    .filter(group => !isCommentStyle(group.response_style))
+    .map(group => {
+      const questions = group.questions || []
+      if (questions.length === 0) return ''
 
-    const questionRows = questions.map(q => {
-      const questionId = q.id || 0
-      const questionStat = questionStatistics.value
-        .flatMap(g => g.questions)
-        .find(qs => qs.questionId === questionId)
-      const rating = questionStat?.average || 0
+      const questionRows = questions.map(q => {
+        const questionId = q.id || 0
+        const questionStat = questionStatistics.value
+          .flatMap(g => g.questions)
+          .find(qs => qs.questionId === questionId)
+        const rating = questionStat?.average || 0
+
+        return `
+          <tr>
+            <td class="question-cell">${q.question}</td>
+            <td class="rating-cell">${rating > 0 ? rating.toFixed(2) : '-'}</td>
+          </tr>
+        `
+      }).join('')
 
       return `
         <tr>
-          <td class="question-cell">${q.question}</td>
-          <td class="rating-cell">${rating > 0 ? rating.toFixed(2) : '-'}</td>
+          <td class="group-title-cell" colspan="2">${group.title}</td>
         </tr>
+        ${questionRows}
       `
     }).join('')
 
-    return `
-      <div class="group-section">
-        <table class="evaluation-table">
-          <thead>
-            <tr>
-              <th class="group-title-cell" colspan="2">${group.title}</th>
-            </tr>
-            <tr>
-              <th class="question-header">Questions</th>
-              <th class="rating-header">Rating</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${questionRows}
-          </tbody>
-        </table>
-      </div>
-    `
-  }).join('')
+  const questionTablesHtml = `
+    <table class="evaluation-table">
+      <thead>
+        <tr>
+          <th class="question-header">Questions</th>
+          <th class="rating-header">Rating</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${allQuestionRows}
+      </tbody>
+    </table>
+  `
 
   const html = `
     <!DOCTYPE html>
@@ -462,9 +567,9 @@ const printReport = () => {
 
         .rating-scale { background: #f9f9f9; padding: 15px; margin-bottom: 25px; border: 1px solid #ddd; }
         .rating-scale h3 { font-size: 12px; margin-bottom: 10px; }
-        .rating-scale p { margin: 3px 0; font-size: 11px; }
-
-        .group-section { margin-bottom: 20px; }
+        .scale-note { margin-bottom: 10px; font-size: 11px; }
+        .scale-row { display: flex; flex-wrap: wrap; gap: 15px; }
+        .scale-item { font-size: 11px; white-space: nowrap; }
 
         .evaluation-table { width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 10px; }
         .evaluation-table th, .evaluation-table td { border: 1px solid #333; padding: 6px 8px; }
@@ -507,7 +612,7 @@ const printReport = () => {
 
         @media print {
           body { padding: 20px; }
-          .group-section { page-break-inside: avoid; }
+          .evaluation-table { page-break-inside: avoid; }
         }
       </style>
     </head>
@@ -529,24 +634,18 @@ const printReport = () => {
           <td class="info-label">Survey:</td>
           <td class="info-value">${survey.value.title}</td>
         </tr>
-        <tr>
-          <td class="info-label">Responses:</td>
-          <td class="info-value">${officeStats.value.responseCount}</td>
-        </tr>
-        <tr>
-          <td class="info-label">Overall Rating:</td>
-          <td class="info-value">${officeStats.value.averageRating.toFixed(2)}</td>
-        </tr>
       </table>
 
       <div class="rating-scale">
         <h3>Rating Scale Description</h3>
-        <p>The rating ranges from 1-5, with 5 being the highest and 1 being the lowest score.</p>
-        <p><strong>5</strong> - Very Satisfied</p>
-        <p><strong>4</strong> - Satisfied</p>
-        <p><strong>3</strong> - Neutral</p>
-        <p><strong>2</strong> - Dissatisfied</p>
-        <p><strong>1</strong> - Very Dissatisfied</p>
+        <p class="scale-note">The rating ranges from 1-5, with 5 being the highest and 1 being the lowest score.</p>
+        <div class="scale-row">
+          <span class="scale-item"><strong>5</strong> - Very Satisfied</span>
+          <span class="scale-item"><strong>4</strong> - Satisfied</span>
+          <span class="scale-item"><strong>3</strong> - Neutral</span>
+          <span class="scale-item"><strong>2</strong> - Dissatisfied</span>
+          <span class="scale-item"><strong>1</strong> - Very Dissatisfied</span>
+        </div>
       </div>
 
       ${questionTablesHtml}
@@ -575,18 +674,18 @@ onMounted(() => {
     <!-- Header -->
     <div class="d-flex align-center gap-4 mb-6">
       <div class="flex-grow-1">
-        <h4 class="text-h4 mb-1">
+        <h4 class="text-h5 font-weight-medium mb-1">
           {{ office?.name || 'Loading...' }}
         </h4>
         <p class="text-body-2 text-medium-emphasis mb-0">
           Office Evaluation Results
-          <span v-if="survey" class="text-primary">- {{ survey.title }}</span>
+          <span v-if="survey">- {{ survey.title }}</span>
         </p>
       </div>
       <VBtn
         v-if="!isLoading && office"
-        color="success"
-        prepend-icon="ri-printer-line"
+        color="primary"
+        variant="outlined"
         @click="printReport"
       >
         Export Report
@@ -600,18 +699,17 @@ onMounted(() => {
 
     <template v-else>
       <!-- Summary Stats -->
-      <VCard class="mb-6">
+      <VCard variant="outlined" class="mb-6">
         <VCardText class="pa-4">
           <div class="d-flex flex-wrap align-center justify-space-between gap-4">
-            <div class="d-flex flex-wrap align-center gap-6">
-              <div class="d-flex align-center gap-2">
-                <VIcon icon="ri-checkbox-circle-line" color="success" size="20" />
-                <span class="text-body-2 text-medium-emphasis">Responses:</span>
-                <span class="font-weight-bold text-success">{{ officeStats.responseCount }}</span>
+            <div class="d-flex align-center gap-8">
+              <div class="text-center">
+                <div class="text-h5 font-weight-bold">{{ officeStats.responseCount }}</div>
+                <div class="text-caption text-medium-emphasis">Responses</div>
               </div>
             </div>
             <div class="text-right">
-              <p class="text-h4 font-weight-bold text-primary mb-0">
+              <p class="text-h4 font-weight-bold mb-0">
                 {{ officeStats.averageRating.toFixed(2) }}
               </p>
               <p class="text-caption text-medium-emphasis">Overall Rating</p>
@@ -621,9 +719,8 @@ onMounted(() => {
       </VCard>
 
       <!-- Question Statistics -->
-      <VCard class="mb-6">
-        <VCardTitle class="pa-4">
-          <VIcon icon="ri-questionnaire-line" class="me-2" />
+      <VCard variant="outlined" class="mb-6">
+        <VCardTitle class="pa-4 text-subtitle-1">
           Survey Questions & Ratings
         </VCardTitle>
         <VDivider />
@@ -631,15 +728,8 @@ onMounted(() => {
           <template v-if="questionStatistics.length > 0">
             <div v-for="(group, groupIndex) in questionStatistics" :key="groupIndex" class="mb-6">
               <div class="d-flex align-center gap-2 mb-3">
-                <VChip size="small" color="primary" variant="tonal">
-                  {{ group.groupNumber }}
-                </VChip>
-                <h6 class="text-h6 mb-0">
-                  {{ group.groupTitle }}
-                </h6>
-                <VChip size="x-small" variant="outlined" class="ms-2">
-                  {{ group.responseStyle }}
-                </VChip>
+                <span class="text-subtitle-2">{{ group.groupNumber }}. {{ group.groupTitle }}</span>
+                <span class="text-caption text-medium-emphasis">({{ group.responseStyle }})</span>
               </div>
 
               <VTable density="compact" class="mb-4 border rounded">
@@ -653,7 +743,12 @@ onMounted(() => {
                   <tr v-for="question in group.questions" :key="question.questionId">
                     <td class="py-3">{{ question.questionText }}</td>
                     <td class="text-center">
-                      <span class="font-weight-bold text-primary">{{ question.average.toFixed(2) }}</span>
+                      <span
+                        class="font-weight-medium"
+                        :class="question.average >= 4 ? 'text-success' : question.average >= 3 ? 'text-warning' : 'text-error'"
+                      >
+                        {{ question.average.toFixed(2) }}
+                      </span>
                     </td>
                   </tr>
                 </tbody>
@@ -661,22 +756,18 @@ onMounted(() => {
             </div>
           </template>
           <div v-else class="text-center text-medium-emphasis py-6">
-            <VIcon icon="ri-file-list-line" size="48" class="mb-2" />
             <p>No question statistics available</p>
           </div>
         </VCardText>
       </VCard>
 
       <!-- Student Comments -->
-      <VCard>
+      <VCard variant="outlined">
         <VCardTitle class="pa-4 d-flex align-center justify-space-between">
-          <div class="d-flex align-center">
-            <VIcon icon="ri-chat-3-line" class="me-2" />
-            Student Comments
-          </div>
-          <VChip size="small" variant="tonal" color="info">
+          <span class="text-subtitle-1">Student Comments</span>
+          <span class="text-body-2 text-medium-emphasis">
             {{ allComments.length }} comment{{ allComments.length !== 1 ? 's' : '' }}
-          </VChip>
+          </span>
         </VCardTitle>
         <VDivider />
         <VCardText class="pa-4">
@@ -685,14 +776,11 @@ onMounted(() => {
               <VCard
                 v-for="comment in allComments"
                 :key="comment.id"
-                variant="outlined"
-                class="pa-4"
+                variant="flat"
+                class="pa-4 bg-grey-lighten-5"
               >
                 <div class="d-flex justify-space-between align-start mb-2">
                   <div class="d-flex align-center gap-3">
-                    <VAvatar color="primary" variant="tonal" size="36">
-                      <VIcon icon="ri-user-line" size="18" />
-                    </VAvatar>
                     <span class="text-caption text-medium-emphasis">
                       {{ formatDate(comment.submittedAt) }}
                     </span>
@@ -720,14 +808,13 @@ onMounted(() => {
                     </VBtn>
                   </div>
                 </div>
-                <div class="text-body-2 mt-3 pa-3 bg-grey-lighten-4 rounded" style="font-style: italic;">
-                  "{{ comment.comment }}"
+                <div class="text-body-2 mt-2">
+                  {{ comment.comment }}
                 </div>
               </VCard>
             </div>
           </template>
           <div v-else class="text-center text-medium-emphasis py-8">
-            <VIcon icon="ri-chat-off-line" size="48" class="mb-2" />
             <p class="mb-0">No comments from students</p>
           </div>
         </VCardText>

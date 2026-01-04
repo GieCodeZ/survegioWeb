@@ -96,6 +96,23 @@ const logout = async () => {
 
         <VDivider />
 
+        <VList class="pa-2">
+          <VListItem
+            :to="{ name: 'profile' }"
+            class="mb-1"
+          >
+            <template #prepend>
+              <VIcon
+                icon="ri-user-settings-line"
+                class="me-2"
+              />
+            </template>
+            <VListItemTitle>Profile</VListItemTitle>
+          </VListItem>
+        </VList>
+
+        <VDivider />
+
         <VCardActions class="pa-3">
           <VBtn
             block

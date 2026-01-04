@@ -3,6 +3,7 @@ definePage({
   meta: {
     action: 'read',
     subject: 'AclDemo',
+    allowedRoles: ['administrator'],
   },
 })
 </script>

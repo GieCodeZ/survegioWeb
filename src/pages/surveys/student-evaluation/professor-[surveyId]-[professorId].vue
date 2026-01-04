@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { $api } from '@/utils/api'
+import { YEAR_LEVEL_OPTIONS } from '@/utils/constants'
 
 definePage({
   meta: {
     action: 'read',
     subject: 'surveys',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -41,6 +43,7 @@ interface SurveyResponse {
   student_id: Student | number
   class_id?: number
   submitted_at: string
+  year_level?: string
   answers?: SurveyAnswer[]
 }
 
@@ -152,6 +155,54 @@ const classesData = computed(() => {
       averageRating: totalCount > 0 ? totalSum / totalCount : 0,
     }
   }).sort((a, b) => a.courseCode.localeCompare(b.courseCode))
+})
+
+// Computed: Responses by year level
+const responsesByYearLevel = computed(() => {
+  const stats: Record<string, {
+    yearLevel: string
+    yearLevelLabel: string
+    totalResponses: number
+    averageRating: number
+    ratingSum: number
+    ratingCount: number
+  }> = {}
+
+  for (const opt of YEAR_LEVEL_OPTIONS) {
+    stats[opt.value] = {
+      yearLevel: opt.value,
+      yearLevelLabel: opt.title,
+      totalResponses: 0,
+      averageRating: 0,
+      ratingSum: 0,
+      ratingCount: 0,
+    }
+  }
+
+  for (const response of responses.value) {
+    const yearLevel = response.year_level || ''
+    if (yearLevel && stats[yearLevel]) {
+      stats[yearLevel].totalResponses++
+      if (response.answers) {
+        for (const answer of response.answers) {
+          const numVal = parseFloat(answer.answer_value)
+          if (!isNaN(numVal) && numVal >= 1 && numVal <= 5) {
+            stats[yearLevel].ratingSum += numVal
+            stats[yearLevel].ratingCount++
+          }
+        }
+      }
+    }
+  }
+
+  for (const key of Object.keys(stats)) {
+    const stat = stats[key]
+    if (stat.ratingCount > 0) {
+      stat.averageRating = stat.ratingSum / stat.ratingCount
+    }
+  }
+
+  return Object.values(stats).filter(s => s.totalResponses > 0)
 })
 
 // Helper: Check if response style is for comments (should be shown in Comments section, not Questions)
@@ -397,7 +448,7 @@ const fetchResponses = async () => {
             { class_id: { _in: classIds } },
           ],
         },
-        fields: ['*', 'student_id.*', 'answers.*', 'answers.question_id.*'],
+        fields: ['*', 'year_level', 'student_id.*', 'answers.*', 'answers.question_id.*'],
         limit: -1,
       },
     })
@@ -531,17 +582,18 @@ const printReport = () => {
     ? `${survey.value.academic_term.semester} ${survey.value.academic_term.schoolYear}`
     : 'N/A'
 
-  // Build the question tables with courses as columns
-  const questionTablesHtml = (survey.value.question_group || []).map(group => {
+  // Build single unified question table with courses as columns
+  const courseHeaders = classesData.value.map(c =>
+    `<th class="course-header">${c.courseCode} - ${c.section}</th>`
+  ).join('')
+
+  // Build all question rows grouped by section (exclude comment-style groups)
+  const allQuestionRows = (survey.value.question_group || [])
+    .filter(group => !isCommentStyle(group.response_style))
+    .map(group => {
     const questions = group.questions || []
     if (questions.length === 0) return ''
 
-    // Course header row
-    const courseHeaders = classesData.value.map(c =>
-      `<th class="course-header"><div class="course-code">${c.courseCode}</div><div class="course-name">${c.courseName}</div></th>`
-    ).join('')
-
-    // Question rows with ratings per course
     const questionRows = questions.map(q => {
       const questionId = q.id || 0
       const ratingCells = classesData.value.map(c => {
@@ -558,24 +610,26 @@ const printReport = () => {
     }).join('')
 
     return `
-      <div class="group-section">
-        <table class="evaluation-table">
-          <thead>
-            <tr>
-              <th class="group-title-cell" colspan="${classesData.value.length + 1}">${group.title}</th>
-            </tr>
-            <tr>
-              <th class="question-header">Questions</th>
-              ${courseHeaders}
-            </tr>
-          </thead>
-          <tbody>
-            ${questionRows}
-          </tbody>
-        </table>
-      </div>
+      <tr>
+        <td class="group-title-cell" colspan="${classesData.value.length + 1}">${group.title}</td>
+      </tr>
+      ${questionRows}
     `
   }).join('')
+
+  const questionTablesHtml = `
+    <table class="evaluation-table">
+      <thead>
+        <tr>
+          <th class="question-header">Questions</th>
+          ${courseHeaders}
+        </tr>
+      </thead>
+      <tbody>
+        ${allQuestionRows}
+      </tbody>
+    </table>
+  `
 
   const html = `
     <!DOCTYPE html>
@@ -596,9 +650,9 @@ const printReport = () => {
 
         .rating-scale { background: #f9f9f9; padding: 15px; margin-bottom: 25px; border: 1px solid #ddd; }
         .rating-scale h3 { font-size: 12px; margin-bottom: 10px; }
-        .rating-scale p { margin: 3px 0; font-size: 11px; }
-
-        .group-section { margin-bottom: 20px; }
+        .scale-note { margin-bottom: 10px; font-size: 11px; }
+        .scale-row { display: flex; flex-wrap: wrap; gap: 15px; }
+        .scale-item { font-size: 11px; white-space: nowrap; }
 
         .evaluation-table { width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 10px; }
         .evaluation-table th, .evaluation-table td { border: 1px solid #333; padding: 6px 8px; }
@@ -624,17 +678,8 @@ const printReport = () => {
           text-align: center;
           padding: 8px;
           vertical-align: middle;
-        }
-
-        .course-code {
           font-weight: bold;
-          font-size: 11px;
-        }
-
-        .course-name {
-          font-size: 9px;
-          font-weight: normal;
-          color: #555;
+          font-size: 10px;
         }
 
         .question-cell {
@@ -652,7 +697,7 @@ const printReport = () => {
 
         @media print {
           body { padding: 20px; }
-          .group-section { page-break-inside: avoid; }
+          .evaluation-table { page-break-inside: avoid; }
         }
       </style>
     </head>
@@ -678,12 +723,14 @@ const printReport = () => {
 
       <div class="rating-scale">
         <h3>Rating Scale Description</h3>
-        <p>The rating ranges from 1-5, with 5 being the highest and 1 being the lowest score.</p>
-        <p><strong>5</strong> - Very Satisfied</p>
-        <p><strong>4</strong> - Satisfied</p>
-        <p><strong>3</strong> - Neutral</p>
-        <p><strong>2</strong> - Dissatisfied</p>
-        <p><strong>1</strong> - Very Dissatisfied</p>
+        <p class="scale-note">The rating ranges from 1-5, with 5 being the highest and 1 being the lowest score.</p>
+        <div class="scale-row">
+          <span class="scale-item"><strong>5</strong> - Very Satisfied</span>
+          <span class="scale-item"><strong>4</strong> - Satisfied</span>
+          <span class="scale-item"><strong>3</strong> - Neutral</span>
+          <span class="scale-item"><strong>2</strong> - Dissatisfied</span>
+          <span class="scale-item"><strong>1</strong> - Very Dissatisfied</span>
+        </div>
       </div>
 
       ${questionTablesHtml}
@@ -715,18 +762,18 @@ onMounted(() => {
         <VIcon icon="ri-arrow-left-line" />
       </VBtn>
       <div class="flex-grow-1">
-        <h4 class="text-h4 mb-1">
+        <h4 class="text-h5 font-weight-medium mb-1">
           {{ professor?.name || 'Loading...' }}
         </h4>
         <p class="text-body-2 text-medium-emphasis mb-0">
           Faculty Evaluation Results
-          <span v-if="survey" class="text-primary">- {{ survey.title }}</span>
+          <span v-if="survey">- {{ survey.title }}</span>
         </p>
       </div>
       <VBtn
         v-if="!isLoading && professor"
-        color="success"
-        prepend-icon="ri-printer-line"
+        color="primary"
+        variant="outlined"
         @click="printReport"
       >
         Export Report
@@ -740,37 +787,27 @@ onMounted(() => {
 
     <template v-else>
       <!-- Summary Stats -->
-      <VCard class="mb-6">
+      <VCard variant="outlined" class="mb-6">
         <VCardText class="pa-4">
           <div class="d-flex flex-wrap align-center justify-space-between gap-4">
-            <div class="d-flex flex-wrap align-center gap-6">
-              <div class="d-flex align-center gap-2">
-                <VIcon icon="ri-book-line" color="info" size="20" />
-                <span class="text-body-2 text-medium-emphasis">Classes:</span>
-                <span class="font-weight-bold">{{ professorStats.classCount }}</span>
+            <div class="d-flex align-center gap-8">
+              <div class="text-center">
+                <div class="text-h5 font-weight-bold">{{ professorStats.classCount }}</div>
+                <div class="text-caption text-medium-emphasis">Classes</div>
               </div>
-              <VDivider vertical class="my-2" />
-              <div class="d-flex align-center gap-2">
-                <VIcon icon="ri-checkbox-circle-line" color="success" size="20" />
-                <span class="text-body-2 text-medium-emphasis">Responses:</span>
-                <span class="font-weight-bold text-success">{{ professorStats.responseCount }}</span>
-                <span class="text-medium-emphasis">/ {{ professorStats.studentCount }}</span>
+              <VDivider vertical class="align-self-stretch" />
+              <div class="text-center">
+                <div class="text-h5 font-weight-bold">{{ professorStats.responseCount }}/{{ professorStats.studentCount }}</div>
+                <div class="text-caption text-medium-emphasis">Responses</div>
               </div>
-              <VDivider vertical class="my-2" />
-              <div class="d-flex align-center gap-2">
-                <VIcon icon="ri-percent-line" color="warning" size="20" />
-                <span class="text-body-2 text-medium-emphasis">Response Rate:</span>
-                <VChip
-                  :color="professorStats.responseRate >= 80 ? 'success' : professorStats.responseRate >= 50 ? 'warning' : 'error'"
-                  size="small"
-                  variant="tonal"
-                >
-                  {{ professorStats.responseRate }}%
-                </VChip>
+              <VDivider vertical class="align-self-stretch" />
+              <div class="text-center">
+                <div class="text-h5 font-weight-bold">{{ professorStats.responseRate }}%</div>
+                <div class="text-caption text-medium-emphasis">Response Rate</div>
               </div>
             </div>
             <div class="text-right">
-              <p class="text-h4 font-weight-bold text-primary mb-0">
+              <p class="text-h4 font-weight-bold mb-0">
                 {{ professorStats.averageRating.toFixed(2) }}
               </p>
               <p class="text-caption text-medium-emphasis">Overall Rating</p>
@@ -780,9 +817,8 @@ onMounted(() => {
       </VCard>
 
       <!-- Classes Table -->
-      <VCard class="mb-6">
-        <VCardTitle class="pa-4">
-          <VIcon icon="ri-book-2-line" class="me-2" />
+      <VCard variant="outlined" class="mb-6">
+        <VCardTitle class="pa-4 text-subtitle-1">
           Classes & Evaluation Results
         </VCardTitle>
         <VDivider />
@@ -809,20 +845,17 @@ onMounted(() => {
                 </td>
                 <td>{{ classData.section }}</td>
                 <td class="text-center">
-                  <span class="font-weight-medium">{{ classData.responseCount }}</span>
-                  <span class="text-medium-emphasis"> / {{ classData.studentCount }}</span>
+                  {{ classData.responseCount }}/{{ classData.studentCount }}
                 </td>
                 <td class="text-center">
-                  <VChip
-                    size="small"
-                    :color="classData.responseRate >= 80 ? 'success' : classData.responseRate >= 50 ? 'warning' : 'error'"
-                    variant="tonal"
+                  {{ classData.responseRate }}%
+                </td>
+                <td class="text-center">
+                  <span
+                    v-if="classData.averageRating > 0"
+                    class="font-weight-medium"
+                    :class="classData.averageRating >= 4 ? 'text-success' : classData.averageRating >= 3 ? 'text-warning' : 'text-error'"
                   >
-                    {{ classData.responseRate }}%
-                  </VChip>
-                </td>
-                <td class="text-center">
-                  <span v-if="classData.averageRating > 0" class="font-weight-bold">
                     {{ classData.averageRating.toFixed(2) }}
                   </span>
                   <span v-else class="text-medium-emphasis">-</span>
@@ -834,9 +867,8 @@ onMounted(() => {
       </VCard>
 
       <!-- Question Statistics -->
-      <VCard class="mb-6">
-        <VCardTitle class="pa-4">
-          <VIcon icon="ri-questionnaire-line" class="me-2" />
+      <VCard variant="outlined" class="mb-6">
+        <VCardTitle class="pa-4 text-subtitle-1">
           Survey Questions & Ratings
         </VCardTitle>
         <VDivider />
@@ -844,31 +876,27 @@ onMounted(() => {
           <template v-if="questionStatistics.length > 0">
             <div v-for="(group, groupIndex) in questionStatistics" :key="groupIndex" class="mb-6">
               <div class="d-flex align-center gap-2 mb-3">
-                <VChip size="small" color="primary" variant="tonal">
-                  {{ group.groupNumber }}
-                </VChip>
-                <h6 class="text-h6 mb-0">
-                  {{ group.groupTitle }}
-                </h6>
-                <VChip size="x-small" variant="outlined" class="ms-2">
-                  {{ group.responseStyle }}
-                </VChip>
+                <span class="text-subtitle-2">{{ group.groupNumber }}. {{ group.groupTitle }}</span>
+                <span class="text-caption text-medium-emphasis">({{ group.responseStyle }})</span>
               </div>
 
               <VTable density="compact" class="mb-4 border rounded">
                 <thead>
                   <tr>
-                    <th style="width: 70%;">Question</th>
-                    <th class="text-center" style="width: 15%;">Responses</th>
+                    <th style="width: 85%;">Question</th>
                     <th class="text-center" style="width: 15%;">Rating</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-for="question in group.questions" :key="question.questionId">
                     <td class="py-3">{{ question.questionText }}</td>
-                    <td class="text-center">{{ question.totalResponses }}</td>
                     <td class="text-center">
-                      <span class="font-weight-bold text-primary">{{ question.average.toFixed(2) }}</span>
+                      <span
+                        class="font-weight-medium"
+                        :class="question.average >= 4 ? 'text-success' : question.average >= 3 ? 'text-warning' : 'text-error'"
+                      >
+                        {{ question.average.toFixed(2) }}
+                      </span>
                     </td>
                   </tr>
                 </tbody>
@@ -876,22 +904,18 @@ onMounted(() => {
             </div>
           </template>
           <div v-else class="text-center text-medium-emphasis py-6">
-            <VIcon icon="ri-file-list-line" size="48" class="mb-2" />
             <p>No question statistics available</p>
           </div>
         </VCardText>
       </VCard>
 
       <!-- Student Comments -->
-      <VCard>
+      <VCard variant="outlined">
         <VCardTitle class="pa-4 d-flex align-center justify-space-between">
-          <div class="d-flex align-center">
-            <VIcon icon="ri-chat-3-line" class="me-2" />
-            Student Comments
-          </div>
-          <VChip size="small" variant="tonal" color="info">
+          <span class="text-subtitle-1">Student Comments</span>
+          <span class="text-body-2 text-medium-emphasis">
             {{ allComments.length }} comment{{ allComments.length !== 1 ? 's' : '' }}
-          </VChip>
+          </span>
         </VCardTitle>
         <VDivider />
         <VCardText class="pa-4">
@@ -900,14 +924,11 @@ onMounted(() => {
               <VCard
                 v-for="comment in allComments"
                 :key="comment.id"
-                variant="outlined"
-                class="pa-4"
+                variant="flat"
+                class="pa-4 bg-grey-lighten-5"
               >
                 <div class="d-flex justify-space-between align-start mb-2">
                   <div class="d-flex align-center gap-3">
-                    <VAvatar color="primary" variant="tonal" size="36">
-                      <VIcon icon="ri-user-line" size="18" />
-                    </VAvatar>
                     <span class="text-caption text-medium-emphasis">
                       {{ formatDate(comment.submittedAt) }}
                     </span>

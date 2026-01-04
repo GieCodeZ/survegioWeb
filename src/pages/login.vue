@@ -110,6 +110,7 @@ const login = async () => {
     else if (roleName === 'dean') {
       userAbilityRules = [
         { action: 'read', subject: 'Auth' },
+        { action: 'read', subject: 'Profile' },
         { action: 'read', subject: 'DeanDashboard' },
         { action: 'read', subject: 'DeanSurveys' },
         { action: 'create', subject: 'DeanSurveys' },
@@ -207,6 +208,7 @@ const login = async () => {
     else if (roleName === 'student') {
       userAbilityRules = [
         { action: 'read', subject: 'Auth' },
+        { action: 'read', subject: 'Profile' },
         { action: 'read', subject: 'StudentDashboard' },
         { action: 'read', subject: 'StudentSurveys' },
         { action: 'create', subject: 'StudentSurveys' },

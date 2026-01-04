@@ -43,6 +43,25 @@ export const canViewNavMenuGroup = (item: NavGroup) => {
 export const canNavigate = (to: RouteLocationNormalized) => {
   const ability = useAbility()
 
+  // Check role-based restrictions first
+  const userData = useCookie('userData').value as { role?: { name?: string } } | null
+  const userRole = userData?.role?.name?.toLowerCase() || ''
+
+  // Check if any matched route has allowedRoles restriction
+  const hasRoleRestriction = to.matched.some(route => {
+    const allowedRoles = route.meta.allowedRoles as string[] | undefined
+    if (allowedRoles && allowedRoles.length > 0) {
+      // If allowedRoles is defined, user's role must be in the list
+      return !allowedRoles.map(r => r.toLowerCase()).includes(userRole)
+    }
+
+    return false
+  })
+
+  // If role restriction fails, deny access
+  if (hasRoleRestriction)
+    return false
+
   // @ts-expect-error We should allow passing string | undefined to can because for admin ability we omit defining action & subject
   return to.matched.some(route => ability.can(route.meta.action, route.meta.subject))
 }

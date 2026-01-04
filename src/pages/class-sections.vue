@@ -5,6 +5,7 @@ definePage({
   meta: {
     action: 'read',
     subject: 'classSection',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -29,6 +30,11 @@ const isDeleteDialogOpen = ref(false)
 const isEditing = ref(false)
 const selectedClassSection = ref<ClassSection | null>(null)
 
+// Deletion prevention state
+const isCheckingDeletion = ref(false)
+const deletionBlockedReason = ref<string | null>(null)
+const relatedClasses = ref<any[]>([])
+
 const form = ref<ClassSection>({
   section: [],
   program_id: null,
@@ -36,9 +42,38 @@ const form = ref<ClassSection>({
 
 const search = ref('')
 
-// Default section options
-const defaultSectionOptions = ['1A', '1B', '2A', '2B', '3A', '3B', '4A', '4B']
-const sectionOptions = ref([...defaultSectionOptions])
+// Bulk add sections input
+const bulkSectionsInput = ref('')
+
+// Add multiple sections from space-separated input
+const addBulkSections = () => {
+  if (!bulkSectionsInput.value.trim()) return
+
+  // Split by spaces, commas, or newlines and filter empty values
+  // Only allow sections in format: number + letter (e.g., 1A, 2B, 3C)
+  const newSections = bulkSectionsInput.value
+    .split(/[\s,]+/)
+    .map(s => s.trim().toUpperCase())
+    .filter(s => /^\d+[A-Z]$/.test(s))
+
+  // Add unique sections that don't already exist
+  for (const section of newSections) {
+    if (!form.value.section.includes(section)) {
+      form.value.section.push(section)
+    }
+  }
+
+  // Clear input
+  bulkSectionsInput.value = ''
+}
+
+// Remove a section from the list
+const removeSection = (section: string) => {
+  const index = form.value.section.indexOf(section)
+  if (index > -1) {
+    form.value.section.splice(index, 1)
+  }
+}
 
 // Table headers
 const headers = [
@@ -54,7 +89,7 @@ const getProgramCode = (classSection: ClassSection) => {
 
   const program = programs.value.find(p => p.id === classSection.program_id)
 
-  return program?.programCode || '-'
+  return program?.programCode
 }
 
 // Fetch class sections from Directus
@@ -67,7 +102,7 @@ const fetchClassSections = async () => {
       },
     })
 
-    classSections.value = res.data || []
+    classSections.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch class sections:', error)
@@ -87,7 +122,7 @@ const fetchPrograms = async () => {
       },
     })
 
-    programs.value = res.data || []
+    programs.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch programs:', error)
@@ -98,7 +133,7 @@ const fetchPrograms = async () => {
 const openCreateDialog = () => {
   isEditing.value = false
   form.value = { section: [], program_id: null }
-  sectionOptions.value = [...defaultSectionOptions]
+  bulkSectionsInput.value = ''
   isDialogOpen.value = true
 }
 
@@ -117,17 +152,56 @@ const openEditDialog = (classSection: ClassSection) => {
     program_id: programId,
   }
 
-  // Add any existing sections that aren't in default options
-  const allSections = new Set([...defaultSectionOptions, ...classSection.section])
-
-  sectionOptions.value = [...allSections]
+  bulkSectionsInput.value = ''
   isDialogOpen.value = true
 }
 
 // Open delete confirmation dialog
-const openDeleteDialog = (classSection: ClassSection) => {
+const openDeleteDialog = async (classSection: ClassSection) => {
   selectedClassSection.value = classSection
   isDeleteDialogOpen.value = true
+  await checkClassSectionDeletion(classSection)
+}
+
+// Check if class section can be deleted
+const checkClassSectionDeletion = async (classSection: ClassSection) => {
+  if (!classSection.id) return
+
+  isCheckingDeletion.value = true
+  deletionBlockedReason.value = null
+  relatedClasses.value = []
+
+  try {
+    // Get the sections from this class section configuration
+    const sections = classSection.section || []
+
+    if (sections.length === 0) {
+      isCheckingDeletion.value = false
+      return
+    }
+
+    // Check for classes using any of these section names
+    const classesRes = await $api('/items/classes', {
+      params: {
+        filter: {
+          section: { _in: sections },
+        },
+        fields: ['id', 'section', 'course_id.courseCode', 'acadTerm_id.schoolYear', 'acadTerm_id.semester'],
+        limit: 10,
+      },
+    })
+
+    if (classesRes.data && classesRes.data.length > 0) {
+      relatedClasses.value = classesRes.data
+      deletionBlockedReason.value = 'classes'
+    }
+  }
+  catch (error) {
+    console.error('Failed to check class section deletion:', error)
+  }
+  finally {
+    isCheckingDeletion.value = false
+  }
 }
 
 // Save class section (create or update)
@@ -167,6 +241,11 @@ const deleteClassSection = async () => {
   if (!selectedClassSection.value?.id)
     return
 
+  // Don't allow deletion if class section has dependencies
+  if (deletionBlockedReason.value) {
+    return
+  }
+
   try {
     await $api(`/items/ClassSection/${selectedClassSection.value.id}`, {
       method: 'DELETE',
@@ -174,6 +253,8 @@ const deleteClassSection = async () => {
 
     isDeleteDialogOpen.value = false
     selectedClassSection.value = null
+    deletionBlockedReason.value = null
+    relatedClasses.value = []
     await fetchClassSections()
   }
   catch (error) {
@@ -309,25 +390,40 @@ onMounted(() => {
               </VSelect>
             </VCol>
             <VCol cols="12">
-              <VCombobox
-                v-model="form.section"
+              <VTextField
+                v-model="bulkSectionsInput"
                 label="Sections"
-                :items="sectionOptions"
+                placeholder="e.g., 1A 1B 2A 2B 3A 3B"
                 variant="outlined"
-                multiple
-                chips
-                closable-chips
-                hint="Select from list or type a new section and press Enter to add"
+                hint="Enter sections separated by spaces (e.g., 1A 2A 2B 3C) and press Enter"
                 persistent-hint
+                @keyup.enter="addBulkSections"
               >
-                <template #no-data>
-                  <VListItem>
-                    <VListItemTitle>
-                      Type a section name and press <kbd>Enter</kbd> to add
-                    </VListItemTitle>
-                  </VListItem>
+                <template #append-inner>
+                  <VBtn
+                    color="primary"
+                    variant="tonal"
+                    size="small"
+                    @click="addBulkSections"
+                  >
+                    Add
+                  </VBtn>
                 </template>
-              </VCombobox>
+              </VTextField>
+
+              <!-- Display added sections as chips -->
+              <div v-if="form.section.length > 0" class="d-flex flex-wrap gap-2 mt-4">
+                <VChip
+                  v-for="sec in form.section"
+                  :key="sec"
+                  closable
+                  color="primary"
+                  variant="tonal"
+                  @click:close="removeSection(sec)"
+                >
+                  {{ sec }}
+                </VChip>
+              </div>
             </VCol>
           </VRow>
         </VCardText>
@@ -356,18 +452,71 @@ onMounted(() => {
     <!-- Delete Confirmation Dialog -->
     <VDialog
       v-model="isDeleteDialogOpen"
-      max-width="400"
+      max-width="500"
     >
       <VCard>
-        <VCardTitle class="pa-6">
+        <VCardTitle class="pa-6 d-flex align-center gap-2">
+          <VIcon icon="ri-error-warning-line" color="error" />
           Delete Class Section
         </VCardTitle>
 
         <VDivider />
 
         <VCardText class="pa-6">
-          Are you sure you want to delete the class sections for <strong>{{ getProgramCode(selectedClassSection!) }}</strong>?
-          This action cannot be undone.
+          <!-- Loading state -->
+          <div v-if="isCheckingDeletion" class="d-flex justify-center pa-4">
+            <VProgressCircular indeterminate color="primary" />
+          </div>
+
+          <template v-else>
+            <!-- Blocked: Has classes using these sections -->
+            <template v-if="deletionBlockedReason === 'classes'">
+              <VAlert
+                type="error"
+                variant="tonal"
+                class="mb-4"
+              >
+                <template #title>
+                  Cannot Delete Class Section
+                </template>
+                There are {{ relatedClasses.length }}+ class(es) using sections from this configuration. Please delete or reassign those classes first.
+              </VAlert>
+
+              <p class="text-subtitle-2 mb-2">Classes using these sections (showing first 10):</p>
+              <VList density="compact" class="mb-4">
+                <VListItem
+                  v-for="cls in relatedClasses"
+                  :key="cls.id"
+                  density="compact"
+                >
+                  <template #prepend>
+                    <VIcon icon="ri-book-line" size="small" />
+                  </template>
+                  <VListItemTitle>
+                    {{ cls.course_id?.courseCode || 'Unknown Course' }} - Section {{ cls.section }}
+                  </VListItemTitle>
+                  <VListItemSubtitle>
+                    {{ cls.acadTerm_id?.schoolYear }} {{ cls.acadTerm_id?.semester }}
+                  </VListItemSubtitle>
+                </VListItem>
+              </VList>
+            </template>
+
+            <!-- Can delete -->
+            <template v-else>
+              <p class="mb-4">
+                Are you sure you want to delete the class sections for <strong>{{ selectedClassSection ? getProgramCode(selectedClassSection) : '' }}</strong>?
+              </p>
+
+              <p v-if="selectedClassSection?.section?.length" class="text-subtitle-2 mb-2">
+                Sections to be deleted: <strong>{{ selectedClassSection.section.join(', ') }}</strong>
+              </p>
+
+              <p class="text-error font-weight-medium mb-0">
+                This action cannot be undone.
+              </p>
+            </template>
+          </template>
         </VCardText>
 
         <VDivider />
@@ -378,9 +527,10 @@ onMounted(() => {
             variant="outlined"
             @click="isDeleteDialogOpen = false"
           >
-            Cancel
+            {{ deletionBlockedReason ? 'Close' : 'Cancel' }}
           </VBtn>
           <VBtn
+            v-if="!deletionBlockedReason && !isCheckingDeletion"
             color="error"
             @click="deleteClassSection"
           >

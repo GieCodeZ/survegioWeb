@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { $api } from '@/utils/api';
+import { $api } from '@/utils/api'
+import { DEFAULT_GENDER, DEFAULT_STATUS, GENDER_OPTIONS, STATUS_OPTIONS, YEAR_LEVEL_OPTIONS } from '@/utils/constants'
 
 definePage({
   meta: {
     action: 'read',
     subject: 'students',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -32,6 +34,7 @@ interface Student {
   class_id?: any[]
   user_id?: string | null
   is_active?: string
+  year_level?: string
 }
 
 interface AccountCredential {
@@ -76,20 +79,17 @@ const form = ref({
   middle_name: '',
   last_name: '',
   email: '',
-  gender: '',
+  gender: DEFAULT_GENDER,
   birthdate: '',
   deparment_id: null as number | null,
   class_id: [] as number[],
-  is_active: 'Active' as string,
+  is_active: DEFAULT_STATUS as string,
   user_id: null as string | null,
+  year_level: null as string | null,
 })
 
 const search = ref('')
 const statusFilter = ref<string | null>(null)
-
-// Options
-const genderOptions = ['M', 'F']
-const statusOptions = ['Active', 'Draft', 'Archived']
 
 // Filtered students by status
 const filteredStudents = computed(() => {
@@ -106,11 +106,18 @@ const headers = [
   { title: 'Student No.', key: 'student_number', sortable: true },
   { title: 'Name', key: 'name', sortable: true },
   { title: 'Department', key: 'department', sortable: false },
+  { title: 'Year', key: 'year_level', sortable: true },
   { title: 'Gender', key: 'gender', sortable: true },
   { title: 'Status', key: 'status', sortable: true },
   { title: 'Account', key: 'account', sortable: false, align: 'center' as const },
   { title: 'Actions', key: 'actions', sortable: false, align: 'center' as const },
 ]
+
+// Get year level display
+const getYearLevelDisplay = (yearLevel: string | undefined): string => {
+  if (!yearLevel) return '-'
+  return yearLevel
+}
 
 // Get student full name
 const getFullName = (student: Student) => {
@@ -145,7 +152,7 @@ const getDepartment = (student: Student): string => {
 const departmentOptions = computed(() => {
   return departments.value.map(dept => ({
     id: dept.id,
-    title: typeof dept.name === 'object' && dept.name !== null ? dept.name.programCode : '-',
+    title: typeof dept.name === 'object' && dept.name !== null ? dept.name.programCode : '',
     subtitle: typeof dept.name === 'object' && dept.name !== null ? dept.name.programName : '',
   }))
 })
@@ -182,7 +189,7 @@ const fetchStudents = async () => {
       },
     })
 
-    students.value = res.data || []
+    students.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch students:', error)
@@ -201,7 +208,7 @@ const fetchDepartments = async () => {
       },
     })
 
-    departments.value = res.data || []
+    departments.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch departments:', error)
@@ -217,7 +224,7 @@ const fetchClasses = async () => {
       },
     })
 
-    classes.value = res.data || []
+    classes.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch classes:', error)
@@ -233,7 +240,7 @@ const fetchRoles = async () => {
       },
     })
 
-    roles.value = res.data || []
+    roles.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch roles:', error)
@@ -243,7 +250,7 @@ const fetchRoles = async () => {
 // Get role ID by name
 const getRoleId = (roleName: string): string | null => {
   const role = roles.value.find(r => r.name.toLowerCase() === roleName.toLowerCase())
-  return role?.id || null
+  return role?.id
 }
 
 // Open dialog for creating new student
@@ -256,12 +263,13 @@ const openCreateDialog = () => {
     middle_name: '',
     last_name: '',
     email: '',
-    gender: '',
+    gender: DEFAULT_GENDER,
     birthdate: '',
     deparment_id: null,
     class_id: [],
-    is_active: 'Active',
+    is_active: DEFAULT_STATUS,
     user_id: null,
+    year_level: null,
   }
   isDialogOpen.value = true
 }
@@ -294,8 +302,9 @@ const openEditDialog = (student: Student) => {
     birthdate: student.birthdate || '',
     deparment_id: deptId,
     class_id: classIds,
-    is_active: student.is_active || 'Active',
+    is_active: student.is_active,
     user_id: student.user_id || null,
+    year_level: student.year_level || null,
   }
 
   isDialogOpen.value = true
@@ -339,6 +348,7 @@ const saveStudent = async () => {
       birthdate: form.value.birthdate || null,
       deparment_id: form.value.deparment_id,
       is_active: form.value.is_active,
+      year_level: form.value.year_level,
     }
 
     // Handle class_id - Directus M2M expects array of junction objects or IDs
@@ -636,7 +646,7 @@ onMounted(() => {
         />
         <VSelect
           v-model="statusFilter"
-          :items="statusOptions"
+          :items="STATUS_OPTIONS"
           label="Status"
           density="compact"
           variant="outlined"
@@ -702,6 +712,18 @@ onMounted(() => {
 
         <template #item.department="{ item }">
           <span v-if="getDepartment(item)">{{ getDepartment(item) }}</span>
+          <span v-else class="text-medium-emphasis">-</span>
+        </template>
+
+        <template #item.year_level="{ item }">
+          <VChip
+            v-if="item.year_level"
+            size="small"
+            variant="tonal"
+            color="info"
+          >
+            {{ getYearLevelDisplay(item.year_level) }}
+          </VChip>
           <span v-else class="text-medium-emphasis">-</span>
         </template>
 
@@ -865,7 +887,7 @@ onMounted(() => {
               <VSelect
                 v-model="form.gender"
                 label="Gender"
-                :items="genderOptions"
+                :items="GENDER_OPTIONS"
                 variant="outlined"
                 :rules="[v => !!v || 'Gender is required']"
               />
@@ -874,9 +896,20 @@ onMounted(() => {
               <VSelect
                 v-model="form.is_active"
                 label="Status"
-                :items="statusOptions"
+                :items="STATUS_OPTIONS"
                 variant="outlined"
                 :rules="[v => !!v || 'Status is required']"
+              />
+            </VCol>
+            <VCol cols="12" md="6">
+              <VSelect
+                v-model="form.year_level"
+                label="Year Level"
+                :items="YEAR_LEVEL_OPTIONS"
+                item-title="title"
+                item-value="value"
+                variant="outlined"
+                placeholder="Select year level..."
               />
             </VCol>
             <VCol cols="12">

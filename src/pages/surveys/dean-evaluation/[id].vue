@@ -5,6 +5,7 @@ definePage({
   meta: {
     action: 'read',
     subject: 'surveys',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -109,7 +110,6 @@ const statusOptions = [
 // Table headers for faculty members
 const facultyTableHeaders = [
   { title: 'Faculty Member', key: 'name', sortable: true },
-  { title: 'Responses', key: 'responseCount', sortable: true, align: 'center' as const },
   { title: 'Avg Rating', key: 'averageRating', sortable: true, align: 'center' as const },
 ]
 
@@ -743,11 +743,11 @@ onMounted(() => {
                 <h6 class="text-h6 mb-4">Schedule</h6>
               </VCol>
 
-              <VCol cols="12" md="4">
+              <VCol cols="12">
                 <VSelect
                   v-model="form.academic_term_id"
                   :items="academicTerms"
-                  :item-title="(item) => `${item.semester} - ${item.schoolYear}`"
+                  :item-title="(item) => `${item.schoolYear} - ${item.semester}`"
                   item-value="id"
                   label="Academic Term"
                   variant="outlined"
@@ -1110,44 +1110,41 @@ onMounted(() => {
 
           <!-- No Responses -->
           <div v-else-if="responses.length === 0" class="text-center pa-12">
-            <VIcon icon="ri-bar-chart-line" size="64" color="medium-emphasis" class="mb-4" />
-            <p class="text-h6 text-medium-emphasis mb-2">No Responses Yet</p>
+            <VIcon icon="ri-inbox-line" size="48" color="medium-emphasis" class="mb-4" />
+            <p class="text-subtitle-1 text-medium-emphasis mb-2">No Responses Yet</p>
             <p class="text-body-2 text-medium-emphasis">
-              When deans submit their evaluations, you'll see the results here.
+              Responses will appear here once deans submit their evaluations.
             </p>
           </div>
 
           <!-- Responses Summary -->
           <template v-else>
             <!-- Summary Card -->
-            <VCard variant="flat" class="bg-surface mb-6">
-              <VCardText class="d-flex align-center flex-wrap gap-4 pa-4">
-                <div class="d-flex align-center gap-2">
-                  <VIcon icon="ri-checkbox-circle-fill" color="success" />
-                  <span class="text-body-1">
-                    <strong>{{ responses.length }}</strong> response(s) submitted
+            <VCard variant="outlined" class="mb-6">
+              <VCardText class="pa-4">
+                <div class="d-flex flex-wrap align-center justify-space-between gap-4">
+                  <div class="d-flex align-center gap-8">
+                    <div class="text-center">
+                      <div class="text-h5 font-weight-bold">{{ responses.length }}</div>
+                      <div class="text-caption text-medium-emphasis">Responses</div>
+                    </div>
+                    <VDivider vertical class="align-self-stretch" />
+                    <div class="text-center">
+                      <div class="text-h5 font-weight-bold">{{ evaluatedTeachers.length }}</div>
+                      <div class="text-caption text-medium-emphasis">Faculty Evaluated</div>
+                    </div>
+                  </div>
+                  <span class="text-body-2 text-medium-emphasis">
+                    Latest: {{ formatDateDisplay(responses[0]?.submitted_at) }}
                   </span>
                 </div>
-                <VDivider vertical class="mx-2" />
-                <div class="d-flex align-center gap-2">
-                  <VIcon icon="ri-user-star-line" color="primary" />
-                  <span class="text-body-1">
-                    <strong>{{ evaluatedTeachers.length }}</strong> faculty member(s) evaluated
-                  </span>
-                </div>
-                <VSpacer />
-                <span class="text-body-2 text-medium-emphasis">
-                  Latest: {{ formatDateDisplay(responses[0]?.submitted_at) }}
-                </span>
               </VCardText>
             </VCard>
 
             <!-- Faculty Members Table -->
             <VCard v-if="evaluatedTeachers.length > 0" variant="outlined">
-              <VCardTitle class="d-flex align-center pa-4">
-                <VIcon icon="ri-user-star-line" class="me-2" />
+              <VCardTitle class="pa-4 text-subtitle-1">
                 Evaluated Faculty Members
-                <VSpacer />
               </VCardTitle>
               <VDivider />
               <VDataTable
@@ -1159,29 +1156,21 @@ onMounted(() => {
                 @click:row="(_event: Event, { item }: { item: any }) => openProfessorDetail(item.id)"
               >
                 <template #item.name="{ item }">
-                  <div class="d-flex align-center gap-2">
-                    <span class="font-weight-medium text-primary">{{ item.name }}</span>
-                    <VIcon icon="ri-arrow-right-s-line" size="16" color="primary" />
-                  </div>
+                  <span class="font-weight-medium">{{ item.name }}</span>
                 </template>
 
                 <template #item.responseCount="{ item }">
-                  <span :class="item.responseCount > 0 ? 'font-weight-medium' : 'text-medium-emphasis'">
-                    {{ item.responseCount }}
-                  </span>
+                  {{ item.responseCount }}
                 </template>
 
                 <template #item.averageRating="{ item }">
-                  <div v-if="item.averageRating > 0" class="d-flex align-center justify-center gap-2">
-                    <span class="font-weight-bold">{{ item.averageRating.toFixed(2) }}</span>
-                    <VChip
-                      size="x-small"
-                      :color="item.averageRating >= 4 ? 'success' : item.averageRating >= 3 ? 'warning' : 'error'"
-                      variant="tonal"
-                    >
-                      / 5
-                    </VChip>
-                  </div>
+                  <span
+                    v-if="item.averageRating > 0"
+                    class="font-weight-medium"
+                    :class="item.averageRating >= 4 ? 'text-success' : item.averageRating >= 3 ? 'text-warning' : 'text-error'"
+                  >
+                    {{ item.averageRating.toFixed(2) }}
+                  </span>
                   <span v-else class="text-medium-emphasis">-</span>
                 </template>
 

@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { $api } from '@/utils/api'
+import { SURVEY_STATUS_OPTIONS } from '@/utils/constants'
 
 definePage({
   meta: {
     action: 'read',
     subject: 'surveys',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -150,12 +152,12 @@ const getAcademicTermDisplay = (survey: DeanSurvey): string => {
   if (typeof survey.academic_term_id === 'object' && survey.academic_term_id !== null) {
     const term = survey.academic_term_id
     if (term.semester && term.schoolYear)
-      return `${term.semester} - ${term.schoolYear}`
+      return `${term.schoolYear} - ${term.semester}`
     return `Term #${term.id}`
   }
   const term = academicTerms.value.find((t: AcademicTerm) => t.id === survey.academic_term_id)
   if (term)
-    return `${term.semester} - ${term.schoolYear}`
+    return `${term.schoolYear} - ${term.semester}`
   return '-'
 }
 
@@ -342,6 +344,24 @@ const deleteSurvey = async () => {
   if (!selectedSurvey.value?.id) return
 
   try {
+    // First, delete all responses associated with this survey
+    const responsesRes = await $api('/items/DeanSurveyResponses', {
+      params: {
+        filter: { survey_id: { _eq: selectedSurvey.value.id } },
+        fields: ['id'],
+      },
+    })
+
+    if (responsesRes.data?.length > 0) {
+      // Delete each response
+      await Promise.all(
+        responsesRes.data.map((response: { id: number }) =>
+          $api(`/items/DeanSurveyResponses/${response.id}`, { method: 'DELETE' }),
+        ),
+      )
+    }
+
+    // Then delete the survey
     await $api(`/items/DeanEvaluationSurvey/${selectedSurvey.value.id}`, {
       method: 'DELETE',
     })
@@ -498,13 +518,21 @@ onMounted(() => {
     </VCard>
 
     <!-- Delete Survey Dialog -->
-    <VDialog v-model="isDeleteDialogOpen" max-width="400">
+    <VDialog v-model="isDeleteDialogOpen" max-width="450">
       <VCard>
         <VCardTitle class="pa-6">Delete Evaluation</VCardTitle>
         <VDivider />
         <VCardText class="pa-6">
-          Are you sure you want to delete <strong>{{ selectedSurvey?.title }}</strong>?
-          This action cannot be undone.
+          <p class="mb-4">
+            Are you sure you want to delete <strong>{{ selectedSurvey?.title }}</strong>?
+          </p>
+          <VAlert
+            type="warning"
+            variant="tonal"
+            class="mb-0"
+          >
+            <strong>Warning:</strong> All responses and data associated with this evaluation will be permanently deleted. This action cannot be undone.
+          </VAlert>
         </VCardText>
         <VDivider />
         <VCardActions class="pa-4">
@@ -558,11 +586,11 @@ onMounted(() => {
               />
             </VCol>
 
-            <VCol cols="12" md="6">
+            <VCol cols="12">
               <VSelect
                 v-model="form.academic_term_id"
                 :items="academicTerms"
-                :item-title="(item) => `${item.semester} - ${item.schoolYear}`"
+                :item-title="(item) => `${item.schoolYear} - ${item.semester}`"
                 item-value="id"
                 label="Academic Term"
                 variant="outlined"

@@ -5,6 +5,7 @@ definePage({
   meta: {
     action: 'read',
     subject: 'DeanSurveys',
+    allowedRoles: ['dean'],
   },
 })
 

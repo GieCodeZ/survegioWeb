@@ -7,6 +7,7 @@ definePage({
   meta: {
     action: 'read',
     subject: 'Dashboard',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -20,20 +21,31 @@ interface AcademicTerm {
 
 // State
 const isLoading = ref(true)
-const stats = ref({
-  totalStudents: 0,
-  totalTeachers: 0,
-  totalClasses: 0,
-  totalDepartments: 0,
-  totalSurveys: 0,
-  activeSurveys: 0,
-  totalResponses: 0,
+const stats = ref<{
+  totalStudents: number | null
+  totalTeachers: number | null
+  totalClasses: number | null
+  totalDepartments: number | null
+  totalSurveys: number | null
+  activeSurveys: number | null
+  totalResponses: number | null
+}>({
+  totalStudents: null,
+  totalTeachers: null,
+  totalClasses: null,
+  totalDepartments: null,
+  totalSurveys: null,
+  activeSurveys: null,
+  totalResponses: null,
 })
 
 const currentTerm = ref<AcademicTerm | null>(null)
-const completionStats = ref({
-  completed: 0,
-  pending: 0,
+const completionStats = ref<{
+  completed: number | null
+  pending: number | null
+}>({
+  completed: null,
+  pending: null,
 })
 
 const vuetifyTheme = useTheme()
@@ -121,31 +133,31 @@ const fetchStats = async () => {
     const studentsRes = await $api('/items/students', {
       params: { aggregate: { count: '*' } },
     })
-    stats.value.totalStudents = studentsRes.data?.[0]?.count ?? 0
+    stats.value.totalStudents = studentsRes.data?.[0]?.count
 
     // Fetch teachers count
     const teachersRes = await $api('/items/Teachers', {
       params: { aggregate: { count: '*' } },
     })
-    stats.value.totalTeachers = teachersRes.data?.[0]?.count ?? 0
+    stats.value.totalTeachers = teachersRes.data?.[0]?.count
 
     // Fetch classes count
     const classesRes = await $api('/items/classes', {
       params: { aggregate: { count: '*' } },
     })
-    stats.value.totalClasses = classesRes.data?.[0]?.count ?? 0
+    stats.value.totalClasses = classesRes.data?.[0]?.count
 
     // Fetch departments count
     const departmentsRes = await $api('/items/Department', {
       params: { aggregate: { count: '*' } },
     })
-    stats.value.totalDepartments = departmentsRes.data?.[0]?.count ?? 0
+    stats.value.totalDepartments = departmentsRes.data?.[0]?.count
 
     // Student Surveys
     const studentSurveysRes = await $api('/items/StudentEvaluationSurvey', {
       params: { aggregate: { count: '*' } },
     })
-    const studentSurveyCount = studentSurveysRes.data?.[0]?.count ?? 0
+    const studentSurveyCount = studentSurveysRes.data?.[0]?.count
 
     const activeStudentSurveysRes = await $api('/items/StudentEvaluationSurvey', {
       params: {
@@ -153,23 +165,23 @@ const fetchStats = async () => {
         aggregate: { count: '*' },
       },
     })
-    const activeStudentCount = activeStudentSurveysRes.data?.[0]?.count ?? 0
+    const activeStudentCount = activeStudentSurveysRes.data?.[0]?.count
 
     const studentResponsesRes = await $api('/items/StudentSurveyResponses', {
       params: { aggregate: { count: '*' } },
     })
-    const studentResponseCount = studentResponsesRes.data?.[0]?.count ?? 0
+    const studentResponseCount = studentResponsesRes.data?.[0]?.count
 
     // Dean Evaluations
-    let deanSurveyCount = 0
-    let activeDeanCount = 0
-    let deanResponseCount = 0
+    let deanSurveyCount: number | undefined
+    let activeDeanCount: number | undefined
+    let deanResponseCount: number | undefined
 
     try {
       const deanSurveysRes = await $api('/items/DeanEvaluationSurvey', {
         params: { aggregate: { count: '*' } },
       })
-      deanSurveyCount = deanSurveysRes.data?.[0]?.count ?? 0
+      deanSurveyCount = deanSurveysRes.data?.[0]?.count
 
       const activeDeanSurveysRes = await $api('/items/DeanEvaluationSurvey', {
         params: {
@@ -177,12 +189,12 @@ const fetchStats = async () => {
           aggregate: { count: '*' },
         },
       })
-      activeDeanCount = activeDeanSurveysRes.data?.[0]?.count ?? 0
+      activeDeanCount = activeDeanSurveysRes.data?.[0]?.count
 
       const deanResponsesRes = await $api('/items/DeanSurveyResponses', {
         params: { aggregate: { count: '*' } },
       })
-      deanResponseCount = deanResponsesRes.data?.[0]?.count ?? 0
+      deanResponseCount = deanResponsesRes.data?.[0]?.count
     }
     catch {
       // Dean collections might not exist yet
@@ -207,7 +219,7 @@ const fetchCurrentTerm = async () => {
         limit: 1,
       },
     })
-    currentTerm.value = res.data?.[0] || null
+    currentTerm.value = res.data?.[0]
   }
   catch (error) {
     console.error('Failed to fetch current term:', error)
@@ -247,16 +259,15 @@ const fetchCompletionStats = async () => {
     const responsesRes = await $api('/items/StudentSurveyResponses', {
       params: { aggregate: { count: '*' } },
     })
-    const completed = responsesRes.data?.[0]?.count ?? 0
+    const completed = responsesRes.data?.[0]?.count
 
     completionStats.value = {
-      completed,
-      pending: Math.max(0, totalExpected - completed),
+      completed: completed ?? null,
+      pending: completed != null ? Math.max(0, totalExpected - completed) : null,
     }
   }
   catch (error) {
     console.error('Failed to fetch completion stats:', error)
-    completionStats.value = { completed: 0, pending: 0 }
   }
 }
 

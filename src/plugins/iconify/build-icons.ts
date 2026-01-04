@@ -12,6 +12,7 @@
  */
 import { promises as fs } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // Installation: npm install --save-dev @iconify/tools @iconify/utils @iconify/json @iconify/iconify
 import { cleanupSVG, importDirectory, isEmptyColor, parseColors, runSVGO } from '@iconify/tools'
@@ -86,16 +87,16 @@ const sources: BundleScriptConfig = {
     // 'json/gg.json',
 
     // Iconify JSON file (@iconify/json is a package name, /json/ is directory where files are, then filename)
-    require.resolve('@iconify-json/ri/icons.json'),
+    fileURLToPath(import.meta.resolve('@iconify-json/ri/icons.json')),
     {
-      filename: require.resolve('@iconify-json/mdi/icons.json'),
+      filename: fileURLToPath(import.meta.resolve('@iconify-json/mdi/icons.json')),
       icons: [
         'language-typescript',
         'language-javascript',
       ],
     },
     {
-      filename: require.resolve('@iconify-json/bxl/icons.json'),
+      filename: fileURLToPath(import.meta.resolve('@iconify-json/bxl/icons.json')),
       icons: [
         'facebook',
         'twitter',
@@ -107,7 +108,7 @@ const sources: BundleScriptConfig = {
 
     // Custom file with only few icons
     // {
-    //   filename: require.resolve('@iconify-json/line-md/icons.json'),
+    //   filename: fileURLToPath(import.meta.resolve('@iconify-json/line-md/icons.json')),
     //   icons: [
     //     'home-twotone-alt',
     //     'github',
@@ -120,7 +121,7 @@ const sources: BundleScriptConfig = {
 }
 
 // File to save bundle to
-const target = join(__dirname, 'icons.css')
+const target = join(import.meta.dirname, 'icons.css')
 
 /**
  * Do stuff!
@@ -150,7 +151,7 @@ const target = join(__dirname, 'icons.css')
     const organizedList = organizeIconsList(sources.icons)
 
     for (const prefix in organizedList) {
-      const filename = require.resolve(`@iconify/json/json/${prefix}.json`)
+      const filename = fileURLToPath(import.meta.resolve(`@iconify/json/json/${prefix}.json`))
 
       sourcesJSON.push({
         filename,

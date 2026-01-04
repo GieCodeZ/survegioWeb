@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { $api } from '@/utils/api'
+import { STUDENT_EVALUATION_TYPE_OPTIONS, SURVEY_STATUS_OPTIONS, YEAR_LEVEL_OPTIONS } from '@/utils/constants'
 
 definePage({
   meta: {
     action: 'read',
     subject: 'surveys',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -81,6 +83,7 @@ interface StudentSurveyForm {
   academic_term_id: number | null
   evaluation_type: 'Class' | 'Office'
   office_id: number | null
+  target_year_levels: string[]
 }
 
 // ==================== STATE ====================
@@ -106,24 +109,18 @@ const form = ref<StudentSurveyForm>({
   instruction: '',
   survey_start: '',
   survey_end: '',
-  is_active: 'Draft',
+  is_active: '' as 'Active' | 'Draft' | 'Archived',
   academic_term_id: null,
-  evaluation_type: 'Class',
+  evaluation_type: '' as 'Class' | 'Office',
   office_id: null,
+  target_year_levels: [],
 })
 
 // ==================== OPTIONS ====================
 
-const statusOptions = [
-  { title: 'Draft', value: 'Draft' },
-  { title: 'Active', value: 'Active' },
-  { title: 'Archived', value: 'Archived' },
-]
+const statusOptions = SURVEY_STATUS_OPTIONS
 
-const evaluationTypeOptions = [
-  { title: 'Class', value: 'Class' },
-  { title: 'Office', value: 'Office' },
-]
+const evaluationTypeOptions = STUDENT_EVALUATION_TYPE_OPTIONS
 
 // ==================== COMPUTED ====================
 
@@ -162,7 +159,7 @@ const getStatusColor = (status: string) => {
     case 'Active': return 'success'
     case 'Draft': return 'warning'
     case 'Archived': return 'secondary'
-    default: return 'default'
+    default: return ''
   }
 }
 
@@ -185,17 +182,17 @@ const getEvaluationTypeColor = (type: string): string => {
 }
 
 const getAcademicTermDisplay = (survey: StudentSurvey): string => {
-  if (!survey.academic_term_id) return '-'
+  if (!survey.academic_term_id) return ''
   if (typeof survey.academic_term_id === 'object' && survey.academic_term_id !== null) {
     const term = survey.academic_term_id
     if (term.semester && term.schoolYear)
-      return `${term.semester} - ${term.schoolYear}`
+      return `${term.schoolYear} - ${term.semester}`
     return `Term #${term.id}`
   }
   const term = academicTerms.value.find((t: AcademicTerm) => t.id === survey.academic_term_id)
   if (term)
-    return `${term.semester} - ${term.schoolYear}`
-  return '-'
+    return `${term.schoolYear} - ${term.semester}`
+  return ''
 }
 
 const getQuestionsCount = (survey: StudentSurvey): number => {
@@ -302,7 +299,7 @@ const endDateValue = computed({
 
 const startTimeValue = computed({
   get: () => {
-    if (!form.value.survey_start) return '00:00'
+    if (!form.value.survey_start) return ''
     const date = new Date(form.value.survey_start)
     return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
   },
@@ -320,7 +317,7 @@ const startTimeValue = computed({
 
 const endTimeValue = computed({
   get: () => {
-    if (!form.value.survey_end) return '23:59'
+    if (!form.value.survey_end) return ''
     const date = new Date(form.value.survey_end)
     return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
   },
@@ -346,7 +343,7 @@ const fetchAcademicTerms = async () => {
         sort: '-schoolYear',
       },
     })
-    academicTerms.value = res.data || []
+    academicTerms.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch academic terms:', error)
@@ -361,11 +358,10 @@ const fetchSchoolOffices = async () => {
         sort: ['name'],
       },
     })
-    schoolOffices.value = res.data || []
+    schoolOffices.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch school offices:', error)
-    schoolOffices.value = []
   }
 }
 
@@ -393,7 +389,6 @@ const fetchTotalStudentsWithClasses = async () => {
   }
   catch (error) {
     console.error('Failed to fetch total students count:', error)
-    totalStudentsWithClasses.value = 0
   }
 }
 
@@ -419,7 +414,7 @@ const fetchSurveys = async () => {
       },
     })
 
-    const surveys: StudentSurvey[] = res.data || []
+    const surveys: StudentSurvey[] = res.data
 
     for (const survey of surveys) {
       if (survey.id) {
@@ -430,10 +425,10 @@ const fetchSurveys = async () => {
               aggregate: { count: '*' },
             },
           })
-          survey._responseCount = responseRes.data?.[0]?.count ?? 0
+          survey._responseCount = responseRes.data?.[0]?.count
         }
         catch {
-          survey._responseCount = 0
+          // Failed to get response count
         }
         survey._totalStudents = getTotalStudents(survey)
       }
@@ -443,7 +438,6 @@ const fetchSurveys = async () => {
   }
   catch (error) {
     console.error('Failed to fetch student surveys:', error)
-    studentSurveys.value = []
   }
   finally {
     isLoading.value = false
@@ -458,10 +452,11 @@ const openCreateDialog = () => {
     instruction: '',
     survey_start: '',
     survey_end: '',
-    is_active: 'Draft',
+    is_active: '' as 'Active' | 'Draft' | 'Archived',
     academic_term_id: null,
-    evaluation_type: 'Class',
+    evaluation_type: '' as 'Class' | 'Office',
     office_id: null,
+    target_year_levels: [],
   }
   isCreateDialogOpen.value = true
 }
@@ -489,6 +484,7 @@ const saveSurvey = async () => {
         evaluation_type: form.value.evaluation_type,
         office_id: form.value.evaluation_type === 'Office' ? form.value.office_id : null,
         assignment_mode: form.value.evaluation_type === 'Office' ? 'all' : null,
+        target_year_levels: form.value.target_year_levels.length > 0 ? form.value.target_year_levels : null,
       },
     })
 
@@ -530,6 +526,24 @@ const deleteSurvey = async () => {
   if (!selectedSurvey.value?.id) return
 
   try {
+    // First, delete all responses associated with this survey
+    const responsesRes = await $api('/items/StudentSurveyResponses', {
+      params: {
+        filter: { survey_id: { _eq: selectedSurvey.value.id } },
+        fields: ['id'],
+      },
+    })
+
+    if (responsesRes.data?.length > 0) {
+      // Delete each response
+      await Promise.all(
+        responsesRes.data.map((response: { id: number }) =>
+          $api(`/items/StudentSurveyResponses/${response.id}`, { method: 'DELETE' }),
+        ),
+      )
+    }
+
+    // Then delete the survey
     await $api(`/items/StudentEvaluationSurvey/${selectedSurvey.value.id}`, {
       method: 'DELETE',
     })
@@ -644,7 +658,7 @@ onMounted(() => {
             />
             <div class="text-caption text-no-wrap">
               {{ getProgress(item) }}%
-              <span class="text-medium-emphasis">({{ item._responseCount || 0 }}/{{ item._totalStudents || 0 }})</span>
+              <span class="text-medium-emphasis">({{ item._responseCount }}/{{ item._totalStudents }})</span>
             </div>
           </div>
         </template>
@@ -665,22 +679,27 @@ onMounted(() => {
             <VIcon icon="ri-emotion-happy-line" size="64" color="medium-emphasis" class="mb-4" />
             <p class="text-h6 text-medium-emphasis mb-2">No Student Satisfaction Surveys</p>
             <p class="text-body-2 text-medium-emphasis mb-4">Create your first survey to start collecting feedback</p>
-            <VBtn color="primary" prepend-icon="ri-add-line" @click="openCreateDialog">
-              Create Survey
-            </VBtn>
           </div>
         </template>
       </VDataTable>
     </VCard>
 
     <!-- Delete Survey Dialog -->
-    <VDialog v-model="isDeleteDialogOpen" max-width="400">
+    <VDialog v-model="isDeleteDialogOpen" max-width="450">
       <VCard>
         <VCardTitle class="pa-6">Delete Survey</VCardTitle>
         <VDivider />
         <VCardText class="pa-6">
-          Are you sure you want to delete <strong>{{ selectedSurvey?.title }}</strong>?
-          This action cannot be undone.
+          <p class="mb-4">
+            Are you sure you want to delete <strong>{{ selectedSurvey?.title }}</strong>?
+          </p>
+          <VAlert
+            type="warning"
+            variant="tonal"
+            class="mb-0"
+          >
+            <strong>Warning:</strong> All responses and data associated with this survey will be permanently deleted. This action cannot be undone.
+          </VAlert>
         </VCardText>
         <VDivider />
         <VCardActions class="pa-4">
@@ -749,6 +768,25 @@ onMounted(() => {
               />
             </VCol>
 
+            <!-- Target Year Levels -->
+            <VCol cols="12" md="6">
+              <VSelect
+                v-model="form.target_year_levels"
+                :items="YEAR_LEVEL_OPTIONS"
+                item-title="title"
+                item-value="value"
+                label="Target Year Levels"
+                placeholder="All year levels"
+                variant="outlined"
+                multiple
+                chips
+                closable-chips
+                clearable
+                hint="Leave empty to target all year levels"
+                persistent-hint
+              />
+            </VCol>
+
             <VCol cols="12">
               <VTextarea
                 v-model="form.instruction"
@@ -759,11 +797,11 @@ onMounted(() => {
               />
             </VCol>
 
-            <VCol cols="12" md="4">
+            <VCol cols="12">
               <VSelect
                 v-model="form.academic_term_id"
                 :items="academicTerms"
-                :item-title="(item) => `${item.semester} - ${item.schoolYear}`"
+                :item-title="(item) => `${item.schoolYear} - ${item.semester}`"
                 item-value="id"
                 label="Academic Term"
                 variant="outlined"

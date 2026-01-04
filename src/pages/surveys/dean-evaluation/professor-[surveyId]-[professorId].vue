@@ -5,6 +5,7 @@ definePage({
   meta: {
     action: 'read',
     subject: 'surveys',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -372,8 +373,8 @@ const printReport = () => {
     ? `${survey.value.academic_term.semester} ${survey.value.academic_term.schoolYear}`
     : 'N/A'
 
-  // Build the question tables
-  const questionTablesHtml = questionStatistics.value.map(group => {
+  // Build single unified question table
+  const allQuestionRows = questionStatistics.value.map(group => {
     const questions = group.questions || []
     if (questions.length === 0) return ''
 
@@ -387,36 +388,26 @@ const printReport = () => {
     }).join('')
 
     return `
-      <div class="group-section">
-        <table class="evaluation-table">
-          <thead>
-            <tr>
-              <th class="group-title-cell" colspan="2">${group.groupTitle}</th>
-            </tr>
-            <tr>
-              <th class="question-header">Questions</th>
-              <th class="rating-header">Rating</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${questionRows}
-          </tbody>
-        </table>
-      </div>
+      <tr>
+        <td class="group-title-cell" colspan="2">${group.groupTitle}</td>
+      </tr>
+      ${questionRows}
     `
   }).join('')
 
-  // Build comments section
-  const commentsHtml = allComments.value.length > 0 ? `
-    <div class="comments-section">
-      <h3>Comments</h3>
-      ${allComments.value.map((c, i) => `
-        <div class="comment-item">
-          <strong>${i + 1}.</strong> ${c.comment}
-        </div>
-      `).join('')}
-    </div>
-  ` : ''
+  const questionTablesHtml = `
+    <table class="evaluation-table">
+      <thead>
+        <tr>
+          <th class="question-header">Questions</th>
+          <th class="rating-header">Rating</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${allQuestionRows}
+      </tbody>
+    </table>
+  `
 
   const html = `
     <!DOCTYPE html>
@@ -437,9 +428,9 @@ const printReport = () => {
 
         .rating-scale { background: #f9f9f9; padding: 15px; margin-bottom: 25px; border: 1px solid #ddd; }
         .rating-scale h3 { font-size: 12px; margin-bottom: 10px; }
-        .rating-scale p { margin: 3px 0; font-size: 11px; }
-
-        .group-section { margin-bottom: 20px; }
+        .scale-note { margin-bottom: 10px; font-size: 11px; }
+        .scale-row { display: flex; flex-wrap: wrap; gap: 15px; }
+        .scale-item { font-size: 11px; white-space: nowrap; }
 
         .evaluation-table { width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 10px; }
         .evaluation-table th, .evaluation-table td { border: 1px solid #333; padding: 6px 8px; }
@@ -478,15 +469,11 @@ const printReport = () => {
           font-size: 10px;
         }
 
-        .comments-section { margin-top: 25px; }
-        .comments-section h3 { font-size: 12px; margin-bottom: 10px; border-bottom: 1px solid #333; padding-bottom: 5px; }
-        .comment-item { padding: 8px; background: #f9f9f9; margin-bottom: 8px; border-left: 3px solid #333; }
-
         .footer { margin-top: 30px; text-align: center; font-size: 9px; color: #666; }
 
         @media print {
           body { padding: 20px; }
-          .group-section { page-break-inside: avoid; }
+          .evaluation-table { page-break-inside: avoid; }
         }
       </style>
     </head>
@@ -512,25 +499,21 @@ const printReport = () => {
           <td class="info-label">Survey:</td>
           <td class="info-value">${survey.value.title}</td>
         </tr>
-        <tr>
-          <td class="info-label">Submitted:</td>
-          <td class="info-value">${formatDate(response.value.submitted_at)}</td>
-        </tr>
       </table>
 
       <div class="rating-scale">
         <h3>Rating Scale Description</h3>
-        <p>The rating ranges from 1-5, with 5 being the highest and 1 being the lowest score.</p>
-        <p><strong>5</strong> - Outstanding / Always Manifested</p>
-        <p><strong>4</strong> - Very Satisfactory / Often Manifested</p>
-        <p><strong>3</strong> - Satisfactory / Sometimes Manifested</p>
-        <p><strong>2</strong> - Unsatisfactory / Seldom Manifested</p>
-        <p><strong>1</strong> - Poor / Never Manifested</p>
+        <p class="scale-note">The rating ranges from 1-5, with 5 being the highest and 1 being the lowest score.</p>
+        <div class="scale-row">
+          <span class="scale-item"><strong>5</strong> - Outstanding</span>
+          <span class="scale-item"><strong>4</strong> - Very Satisfactory</span>
+          <span class="scale-item"><strong>3</strong> - Satisfactory</span>
+          <span class="scale-item"><strong>2</strong> - Unsatisfactory</span>
+          <span class="scale-item"><strong>1</strong> - Poor</span>
+        </div>
       </div>
 
       ${questionTablesHtml}
-
-      ${commentsHtml}
 
       <div class="footer">
         Generated on ${new Date().toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
@@ -559,18 +542,18 @@ onMounted(() => {
         <VIcon icon="ri-arrow-left-line" />
       </VBtn>
       <div class="flex-grow-1">
-        <h4 class="text-h4 mb-1">
+        <h4 class="text-h5 font-weight-medium mb-1">
           {{ professor ? `${professor.first_name} ${professor.last_name}` : 'Loading...' }}
         </h4>
         <p class="text-body-2 text-medium-emphasis mb-0">
           Dean Evaluation Results
-          <span v-if="survey" class="text-primary">- {{ survey.title }}</span>
+          <span v-if="survey">- {{ survey.title }}</span>
         </p>
       </div>
       <VBtn
         v-if="!isLoading && professor && response"
-        color="success"
-        prepend-icon="ri-printer-line"
+        color="primary"
+        variant="outlined"
         @click="printReport"
       >
         Export Report
@@ -584,11 +567,11 @@ onMounted(() => {
 
     <template v-else>
       <!-- No Response Found -->
-      <VCard v-if="!response" class="mb-6">
+      <VCard v-if="!response" variant="outlined" class="mb-6">
         <VCardText class="text-center pa-12">
-          <VIcon icon="ri-file-list-line" size="64" color="medium-emphasis" class="mb-4" />
+          <VIcon icon="ri-file-list-line" size="48" color="medium-emphasis" class="mb-4" />
           <p class="text-h6 text-medium-emphasis mb-2">No Evaluation Found</p>
-          <p class="text-body-2 text-medium-emphasis">
+          <p class="text-body-2 text-medium-emphasis mb-0">
             This professor has not been evaluated yet for this survey.
           </p>
         </VCardText>
@@ -596,53 +579,53 @@ onMounted(() => {
 
       <template v-else>
         <!-- Summary Info -->
-        <VCard class="mb-6">
+        <VCard variant="outlined" class="mb-6">
           <VCardText class="pa-4">
-            <div class="d-flex flex-wrap align-center gap-6">
-              <div class="d-flex align-center gap-2">
-                <VIcon icon="ri-user-star-line" color="primary" size="20" />
-                <span class="text-body-2 text-medium-emphasis">Evaluated By:</span>
-                <span class="font-weight-bold">{{ getDeanName() }}</span>
+            <div class="d-flex flex-wrap align-center gap-8">
+              <div class="text-center">
+                <div class="text-h5 font-weight-bold">{{ getDeanName() }}</div>
+                <div class="text-caption text-medium-emphasis">Evaluated By</div>
               </div>
-              <div class="d-flex align-center gap-2">
-                <VIcon icon="ri-calendar-line" color="info" size="20" />
-                <span class="text-body-2 text-medium-emphasis">Submitted:</span>
-                <span class="font-weight-bold">{{ formatDate(response.submitted_at) }}</span>
+              <VDivider vertical class="align-self-stretch" />
+              <div class="text-center">
+                <div class="text-h5 font-weight-bold">{{ formatDate(response.submitted_at) }}</div>
+                <div class="text-caption text-medium-emphasis">Submitted</div>
               </div>
             </div>
           </VCardText>
         </VCard>
 
         <!-- Question Statistics -->
-        <VCard class="mb-6">
-          <VCardTitle class="pa-4">
-            <VIcon icon="ri-questionnaire-line" class="me-2" />
-            Evaluation Responses
+        <VCard variant="outlined" class="mb-6">
+          <VCardTitle class="pa-4 text-subtitle-1">
+            Survey Questions & Ratings
           </VCardTitle>
           <VDivider />
           <VCardText class="pa-4">
             <template v-if="questionStatistics.length > 0">
               <div v-for="(group, groupIndex) in questionStatistics" :key="groupIndex" class="mb-6">
-                <h6 class="text-h6 mb-3">{{ group.groupTitle }}</h6>
+                <div class="d-flex align-center gap-2 mb-3">
+                  <span class="text-subtitle-2">{{ group.groupNumber }}. {{ group.groupTitle }}</span>
+                  <span class="text-caption text-medium-emphasis">({{ group.responseStyle }})</span>
+                </div>
 
                 <VTable density="compact" class="mb-4 border rounded">
                   <thead>
                     <tr>
-                      <th style="width: 80%;">Question</th>
-                      <th class="text-center" style="width: 20%;">Rating</th>
+                      <th style="width: 85%;">Question</th>
+                      <th class="text-center" style="width: 15%;">Rating</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr v-for="question in group.questions" :key="question.questionId">
                       <td class="py-3">{{ question.questionText }}</td>
                       <td class="text-center">
-                        <VChip
-                          :color="parseInt(question.answerValue) >= 4 ? 'success' : parseInt(question.answerValue) >= 3 ? 'warning' : parseInt(question.answerValue) >= 1 ? 'error' : 'secondary'"
-                          size="small"
-                          variant="tonal"
+                        <span
+                          class="font-weight-medium"
+                          :class="parseInt(question.answerValue) >= 4 ? 'text-success' : parseInt(question.answerValue) >= 3 ? 'text-warning' : parseInt(question.answerValue) >= 1 ? 'text-error' : 'text-medium-emphasis'"
                         >
                           {{ question.answerValue }}
-                        </VChip>
+                        </span>
                       </td>
                     </tr>
                   </tbody>
@@ -650,22 +633,18 @@ onMounted(() => {
               </div>
             </template>
             <div v-else class="text-center text-medium-emphasis py-6">
-              <VIcon icon="ri-file-list-line" size="48" class="mb-2" />
               <p>No question statistics available</p>
             </div>
           </VCardText>
         </VCard>
 
         <!-- Comments -->
-        <VCard>
+        <VCard variant="outlined">
           <VCardTitle class="pa-4 d-flex align-center justify-space-between">
-            <div class="d-flex align-center">
-              <VIcon icon="ri-chat-3-line" class="me-2" />
-              Comments
-            </div>
-            <VChip size="small" variant="tonal" color="info">
+            <span class="text-subtitle-1">Dean Comments</span>
+            <span class="text-body-2 text-medium-emphasis">
               {{ allComments.length }} comment{{ allComments.length !== 1 ? 's' : '' }}
-            </VChip>
+            </span>
           </VCardTitle>
           <VDivider />
           <VCardText class="pa-4">
@@ -674,20 +653,14 @@ onMounted(() => {
                 <VCard
                   v-for="comment in allComments"
                   :key="comment.id"
-                  variant="outlined"
-                  class="pa-4"
+                  variant="flat"
+                  class="pa-4 bg-grey-lighten-5"
                 >
                   <div class="d-flex justify-space-between align-start mb-2">
                     <div class="d-flex align-center gap-3">
-                      <VAvatar color="primary" variant="tonal" size="36">
-                        <VIcon icon="ri-user-star-line" size="18" />
-                      </VAvatar>
-                      <div>
-                        <span class="font-weight-medium">{{ comment.deanName }}</span>
-                        <p class="text-caption text-medium-emphasis mb-0">
-                          {{ formatDate(comment.submittedAt) }}
-                        </p>
-                      </div>
+                      <span class="text-caption text-medium-emphasis">
+                        {{ formatDate(comment.submittedAt) }}
+                      </span>
                     </div>
                     <div class="d-flex gap-1">
                       <VBtn
@@ -712,7 +685,6 @@ onMounted(() => {
                       </VBtn>
                     </div>
                   </div>
-                  <p class="text-caption text-medium-emphasis mb-2">{{ comment.questionText }}</p>
                   <div class="text-body-2 mt-3 pa-3 bg-grey-lighten-4 rounded" style="font-style: italic;">
                     "{{ comment.comment }}"
                   </div>
@@ -721,7 +693,7 @@ onMounted(() => {
             </template>
             <div v-else class="text-center text-medium-emphasis py-8">
               <VIcon icon="ri-chat-off-line" size="48" class="mb-2" />
-              <p class="mb-0">No comments</p>
+              <p class="mb-0">No comments from dean</p>
             </div>
           </VCardText>
         </VCard>

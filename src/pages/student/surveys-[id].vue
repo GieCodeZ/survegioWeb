@@ -5,6 +5,7 @@ definePage({
   meta: {
     action: 'read',
     subject: 'StudentSurveys',
+    allowedRoles: ['student'],
   },
 })
 
@@ -70,6 +71,7 @@ const survey = ref<StudentSurvey | null>(null)
 const classInfo = ref<ClassInfo | null>(null)
 const officeInfo = ref<SchoolOffice | null>(null)
 const answers = ref<Record<number, string>>({})
+const studentYearLevel = ref<number | null>(null)
 
 const snackbar = ref({
   show: false,
@@ -182,6 +184,23 @@ const fetchOfficeInfo = async () => {
   }
 }
 
+// Fetch student's year level
+const fetchStudentYearLevel = async () => {
+  try {
+    const userData = useCookie('userData').value as any
+    const sid = userData?.student_id
+    if (sid) {
+      const res = await $api(`/items/students/${sid}`, {
+        params: { fields: ['year_level'] },
+      })
+      studentYearLevel.value = res.data?.year_level || null
+    }
+  }
+  catch (err) {
+    console.error('Failed to fetch student year level:', err)
+  }
+}
+
 // Fetch survey
 const fetchSurvey = async () => {
   isLoading.value = true
@@ -194,6 +213,7 @@ const fetchSurvey = async () => {
       }),
       fetchClassInfo(),
       fetchOfficeInfo(),
+      fetchStudentYearLevel(),
     ])
     survey.value = surveyRes.data
   }
@@ -230,6 +250,7 @@ const submitResponse = async () => {
       survey_id: surveyId.value,
       student_id: studentId,
       submitted_at: new Date().toISOString(),
+      year_level: studentYearLevel.value,
     }
 
     // For office-based evaluations, include office_id

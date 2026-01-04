@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { $api } from '@/utils/api'
+import { YEAR_LEVEL_OPTIONS } from '@/utils/constants'
 import Papa from 'papaparse'
 
 definePage({
   meta: {
     action: 'read',
     subject: 'classes',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -49,6 +51,7 @@ interface ClassItem {
   student_id?: number[]
   department_id: number[]
   teacher_id?: number | Teacher | null
+  year_level?: string
 }
 
 interface ImportedStudent {
@@ -58,6 +61,7 @@ interface ImportedStudent {
   middleInitial: string
   gender: string
   email: string
+  yearLevel: string
   programSection: string
 }
 
@@ -67,6 +71,7 @@ interface ParsedClassData {
   courseCode: string
   courseName: string
   section: string
+  teacherName: string
   students: ImportedStudent[]
 }
 
@@ -90,6 +95,7 @@ const form = ref({
   section: '',
   department_id: null as number | null,
   teacher_id: null as number | null,
+  year_level: null as string | null,
 })
 
 const search = ref('')
@@ -110,11 +116,13 @@ const importResult = ref<{ success: boolean; message: string; details?: string[]
 const selectedAcadTermForImport = ref<number | null>(null)
 const selectedDepartmentForImport = ref<number | null>(null)
 const selectedTeacherForImport = ref<number | null>(null)
+const selectedYearLevelForImport = ref<string | null>(null)
 
 // Table headers
 const headers = [
   { title: 'Section', key: 'section', sortable: true },
   { title: 'Course', key: 'course', sortable: true },
+  { title: 'Year', key: 'year_level', sortable: true },
   { title: 'Teacher', key: 'teacher', sortable: true },
   { title: 'Department', key: 'department', sortable: false },
   { title: 'Academic Term', key: 'acadTerm', sortable: true },
@@ -122,13 +130,19 @@ const headers = [
   { title: 'Actions', key: 'actions', sortable: false, align: 'center' as const },
 ]
 
+// Get year level display
+const getYearLevelDisplay = (yearLevel: string | undefined): string => {
+  if (!yearLevel) return '-'
+  return yearLevel
+}
+
 // Get academic term display
 const getAcademicTerm = (classItem: ClassItem): string => {
   if (typeof classItem.acadTerm_id === 'object' && classItem.acadTerm_id !== null)
     return `${classItem.acadTerm_id.schoolYear} - ${classItem.acadTerm_id.semester}`
 
   const term = academicTerms.value.find(t => t.id === classItem.acadTerm_id)
-  return term ? `${term.schoolYear} - ${term.semester}` : '-'
+  return term ? `${term.schoolYear} - ${term.semester}` : ''
 }
 
 // Get academic term status
@@ -137,7 +151,7 @@ const getAcademicTermStatus = (classItem: ClassItem): string => {
     return classItem.acadTerm_id.status
 
   const term = academicTerms.value.find(t => t.id === classItem.acadTerm_id)
-  return term?.status || ''
+  return term?.status
 }
 
 // Get course display
@@ -146,7 +160,7 @@ const getCourse = (classItem: ClassItem): string => {
     return classItem.course_id.courseCode
 
   const course = courses.value.find(c => c.id === classItem.course_id)
-  return course?.courseCode || '-'
+  return course?.courseCode
 }
 
 // Get course full name for tooltip
@@ -323,7 +337,7 @@ const teacherOptions = computed(() => {
 // Get teacher display name
 const getTeacher = (classItem: ClassItem): string => {
   if (!classItem.teacher_id)
-    return '-'
+    return ''
   if (typeof classItem.teacher_id === 'object' && classItem.teacher_id !== null) {
     const t = classItem.teacher_id
     return `${t.last_name}, ${t.first_name}${t.middle_name ? ` ${t.middle_name.charAt(0)}.` : ''}`
@@ -331,7 +345,7 @@ const getTeacher = (classItem: ClassItem): string => {
   const teacher = teachers.value.find(t => t.id === classItem.teacher_id)
   if (teacher)
     return `${teacher.last_name}, ${teacher.first_name}${teacher.middle_name ? ` ${teacher.middle_name.charAt(0)}.` : ''}`
-  return '-'
+  return ''
 }
 
 // Fetch classes from Directus
@@ -344,7 +358,7 @@ const fetchClasses = async () => {
       },
     })
 
-    classes.value = res.data || []
+    classes.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch classes:', error)
@@ -365,7 +379,7 @@ const fetchAcademicTerms = async () => {
       },
     })
 
-    academicTerms.value = res.data || []
+    academicTerms.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch academic terms:', error)
@@ -382,7 +396,7 @@ const fetchCourses = async () => {
       },
     })
 
-    courses.value = res.data || []
+    courses.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch courses:', error)
@@ -398,7 +412,7 @@ const fetchClassSections = async () => {
       },
     })
 
-    classSections.value = res.data || []
+    classSections.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch class sections:', error)
@@ -414,7 +428,7 @@ const fetchDepartments = async () => {
       },
     })
 
-    departments.value = res.data || []
+    departments.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch departments:', error)
@@ -431,7 +445,7 @@ const fetchTeachers = async () => {
       },
     })
 
-    teachers.value = res.data || []
+    teachers.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch teachers:', error)
@@ -448,6 +462,7 @@ const openCreateDialog = () => {
     section: '',
     department_id: null,
     teacher_id: null,
+    year_level: null,
   }
   isDialogOpen.value = true
 }
@@ -494,6 +509,7 @@ const openEditDialog = (classItem: ClassItem) => {
     section: classItem.section,
     department_id: deptId,
     teacher_id: teacherId ?? null,
+    year_level: classItem.year_level || null,
   }
 
   isDialogOpen.value = true
@@ -513,6 +529,7 @@ const saveClass = async () => {
       course_id: form.value.course_id,
       section: form.value.section,
       teacher_id: form.value.teacher_id,
+      year_level: form.value.year_level,
     }
 
     // Handle department_id M2M - Directus expects junction table structure
@@ -534,6 +551,14 @@ const saveClass = async () => {
         method: 'POST',
         body,
       })
+    }
+
+    // Assign teacher to department if they don't have one assigned
+    if (form.value.teacher_id && form.value.department_id) {
+      const hasDept = await checkTeacherHasDepartment(form.value.teacher_id)
+      if (!hasDept) {
+        await assignTeacherToDepartment(form.value.teacher_id, form.value.department_id)
+      }
     }
 
     isDialogOpen.value = false
@@ -626,6 +651,7 @@ const openImportDialog = () => {
   selectedAcadTermForImport.value = null
   selectedDepartmentForImport.value = null
   selectedTeacherForImport.value = null
+  selectedYearLevelForImport.value = null
   isImportDialogOpen.value = true
 }
 
@@ -654,6 +680,12 @@ const parseImportFile = () => {
         const parsed = extractClassData(results.data)
         parsedImportData.value = parsed
         importStep.value = 'preview'
+
+        // Auto-detect year level from section (e.g., "BSCS-2A" -> "2nd Year")
+        const detectedYearLevel = detectYearLevelFromSection(parsed.section)
+        if (detectedYearLevel) {
+          selectedYearLevelForImport.value = detectedYearLevel
+        }
       }
       catch (err: any) {
         importError.value = err.message || 'Failed to parse file'
@@ -677,10 +709,12 @@ const extractClassData = (rows: string[][]): ParsedClassData => {
     courseCode: '',
     courseName: '',
     section: '',
+    teacherName: '',
     students: [],
   }
 
   let studentStartIndex = -1
+  let sectionFoundAtIndex = -1
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]
@@ -699,18 +733,35 @@ const extractClassData = (rows: string[][]): ParsedClassData => {
       }
     }
 
-    // Look for course code line (e.g., ",CS101 - Introduction to Computing")
-    if (secondCell.match(/^[A-Z]{2,4}\d{2,4}\s*-/i)) {
-      const courseMatch = secondCell.match(/^([A-Z]{2,4}\d{2,4})\s*-\s*(.+)$/i)
+    // Look for course code line - check both firstCell and secondCell
+    // Supports formats like "CS101 - Introduction to Computing" in first OR second column
+    const courseCellCandidate = firstCell.match(/^[A-Z]{2,4}\d{2,4}\s*-/i) ? firstCell
+      : secondCell.match(/^[A-Z]{2,4}\d{2,4}\s*-/i) ? secondCell : null
+    if (courseCellCandidate) {
+      const courseMatch = courseCellCandidate.match(/^([A-Z]{2,4}\d{2,4})\s*-\s*(.+)$/i)
       if (courseMatch) {
         data.courseCode = courseMatch[1].trim()
         data.courseName = courseMatch[2].trim()
       }
     }
 
-    // Look for section line (e.g., ",BSCS-2A")
-    if (secondCell.match(/^[A-Z]{2,6}-?\d?[A-Z]$/i) && !data.section) {
-      data.section = secondCell.trim()
+    // Look for section line - check both firstCell and secondCell
+    // Supports formats like "BSCS-2A" in first OR second column
+    const sectionCellCandidate = firstCell.match(/^[A-Z]{2,6}-?\d?[A-Z]$/i) ? firstCell
+      : secondCell.match(/^[A-Z]{2,6}-?\d?[A-Z]$/i) ? secondCell : null
+    if (sectionCellCandidate && !data.section) {
+      data.section = sectionCellCandidate.trim()
+      sectionFoundAtIndex = i
+    }
+
+    // Look for teacher name (appears after section, before student header)
+    // Teacher name is just a name like "John Doe" - check in secondCell or firstCell
+    if (sectionFoundAtIndex > 0 && i > sectionFoundAtIndex && !data.teacherName && studentStartIndex < 0) {
+      const potentialName = secondCell || firstCell
+      // Check if it looks like a name (contains letters, spaces, no special patterns like course codes)
+      if (potentialName && potentialName.match(/^[A-Za-z]+(\s+[A-Za-z]+)+$/) && !potentialName.match(/^No\.?$/i)) {
+        data.teacherName = potentialName
+      }
     }
 
     // Look for student data header row
@@ -727,24 +778,35 @@ const extractClassData = (rows: string[][]): ParsedClassData => {
       const firstName = (row[3] || '').trim()
       const middleInitial = (row[4] || '').trim()
 
-      // Handle both old format (6 cols) and new format (8 cols with gender, email)
+      // Handle multiple formats:
+      // Old format (6 cols): No, StudentNo, LastName, FirstName, MI, Section
+      // Medium format (8 cols): No, StudentNo, LastName, FirstName, MI, Gender, Email, Section
+      // New format (9 cols): No, StudentNo, LastName, FirstName, MI, Gender, Email, YearLevel, Section
       let gender = ''
       let email = ''
+      let yearLevel = ''
       let programSection = ''
 
-      // Check if column 6 looks like an email (contains @) to detect new format
-      const col6 = (row[6] || '').trim()
       const col5 = (row[5] || '').trim()
+      const col6 = (row[6] || '').trim()
       const col7 = (row[7] || '').trim()
+      const col8 = (row[8] || '').trim()
 
-      if (col6.includes('@') || (col5 && col7)) {
-        // New format: No, StudentNo, LastName, FirstName, MI, Gender, Email, Section
+      if (col8) {
+        // New format (9 cols): No, StudentNo, LastName, FirstName, MI, Gender, Email, YearLevel, Section
+        gender = col5
+        email = col6
+        yearLevel = col7 // Direct string: "1st Year", "2nd Year", etc.
+        programSection = col8
+      }
+      else if (col6.includes('@') || (col5 && col7)) {
+        // Medium format (8 cols): No, StudentNo, LastName, FirstName, MI, Gender, Email, Section
         gender = col5
         email = col6
         programSection = col7
       }
       else {
-        // Old format: No, StudentNo, LastName, FirstName, MI, Section
+        // Old format (6 cols): No, StudentNo, LastName, FirstName, MI, Section
         programSection = col5
       }
 
@@ -758,6 +820,7 @@ const extractClassData = (rows: string[][]): ParsedClassData => {
           middleInitial,
           gender,
           email,
+          yearLevel,
           programSection,
         })
       }
@@ -787,7 +850,116 @@ const findDepartmentByProgramCode = (programCode: string): number | null => {
       return d.name.programCode?.toUpperCase() === programCode.toUpperCase()
     return false
   })
-  return dept?.id || null
+  return dept?.id
+}
+
+// Extract section suffix from full section (e.g., "BSCS-2A" -> "2A", "BSCS2A" -> "2A")
+// Section format should be: 1A, 2A, 2B, 3C, etc.
+const extractSectionSuffix = (fullSection: string, programCode: string): string => {
+  // Remove program code prefix (with or without dash/space)
+  const pattern = new RegExp(`^${programCode}[-\\s]?`, 'i')
+  const suffix = fullSection.replace(pattern, '').trim()
+
+  // Validate and extract section in format like 1A, 2A, 2B, 3C (number + letter)
+  const sectionMatch = suffix.match(/^(\d+[A-Z])$/i)
+  if (sectionMatch) {
+    return sectionMatch[1].toUpperCase()
+  }
+
+  // If the suffix itself looks like a valid section format, return it
+  if (/^\d+[A-Z]$/i.test(suffix)) {
+    return suffix.toUpperCase()
+  }
+
+  // Try to extract from the full section if program code removal didn't work
+  const fullMatch = fullSection.match(/(\d+[A-Z])$/i)
+  if (fullMatch) {
+    return fullMatch[1].toUpperCase()
+  }
+
+  return ''
+}
+
+// Detect year level from section (e.g., "BSCS-2A" -> "2nd Year", "BSIT1B" -> "1st Year")
+const detectYearLevelFromSection = (section: string): string | null => {
+  // Extract the numeric part from section (e.g., "BSCS-2A" -> "2", "BSIT1B" -> "1")
+  const match = section.match(/(\d+)[A-Z]$/i)
+  if (match) {
+    const yearNum = parseInt(match[1])
+    const yearLevelMap: Record<number, string> = {
+      1: '1st Year',
+      2: '2nd Year',
+      3: '3rd Year',
+      4: '4th Year',
+    }
+    return yearLevelMap[yearNum] || null
+  }
+  return null
+}
+
+// Ensure section exists in ClassSection table for the given program
+const ensureSectionExists = async (section: string, departmentId: number): Promise<void> => {
+  // Get the program code from the department
+  const dept = departments.value.find(d => d.id === departmentId)
+  if (!dept || typeof dept.name !== 'object' || dept.name === null) return
+
+  const programCode = dept.name.programCode
+
+  // Extract the section suffix (e.g., "BSCS-2A" -> "2A")
+  const sectionSuffix = extractSectionSuffix(section, programCode)
+  if (!sectionSuffix) return
+
+  // Find the ClassSection for this program
+  const classSection = classSections.value.find(cs => {
+    if (typeof cs.program_id === 'object' && cs.program_id !== null)
+      return cs.program_id.programCode?.toUpperCase() === programCode.toUpperCase()
+    return false
+  })
+
+  if (classSection) {
+    // Check if section suffix already exists
+    const sectionExists = classSection.section.some(s =>
+      s.toUpperCase() === sectionSuffix.toUpperCase(),
+    )
+
+    if (!sectionExists) {
+      // Add the new section to existing ClassSection
+      const updatedSections = [...classSection.section, sectionSuffix.toUpperCase()]
+
+      await $api(`/items/ClassSection/${classSection.id}`, {
+        method: 'PATCH',
+        body: {
+          section: updatedSections,
+        },
+      })
+
+      // Refresh class sections
+      await fetchClassSections()
+    }
+  }
+  else {
+    // Find the program ID
+    const programRes = await $api('/items/programs', {
+      params: {
+        filter: { programCode: { _eq: programCode } },
+        fields: ['id'],
+      },
+    })
+
+    if (programRes.data && programRes.data.length > 0) {
+      // Create new ClassSection for this program
+      await $api('/items/ClassSection', {
+        method: 'POST',
+        body: {
+          program_id: programRes.data[0].id,
+          section: [sectionSuffix.toUpperCase()],
+        },
+      })
+
+      // Refresh class sections
+      await fetchClassSections()
+    }
+  }
 }
 
 // Find or create course
@@ -821,7 +993,7 @@ const findAcademicTerm = (semester: string, schoolYear: string): number | null =
     t.semester.toLowerCase().includes(semester.toLowerCase().replace(' semester', ''))
     && t.schoolYear === schoolYear,
   )
-  return term?.id || null
+  return term?.id
 }
 
 // Create or find student
@@ -860,12 +1032,129 @@ const findOrCreateStudent = async (studentData: ImportedStudent, departmentId: n
   if (departmentId)
     studentBody.deparment_id = departmentId
 
+  if (studentData.yearLevel)
+    studentBody.year_level = studentData.yearLevel // String: "1st Year", "2nd Year", etc.
+
   const res = await $api('/items/students', {
     method: 'POST',
     body: studentBody,
   })
 
   return res.data.id
+}
+
+// Check if teacher has a department assigned
+const checkTeacherHasDepartment = async (teacherId: number): Promise<boolean> => {
+  try {
+    // Check all departments to see if this teacher is in any
+    const deptRes = await $api('/items/Department', {
+      params: {
+        fields: ['id', 'teacher_id.Teachers_id'],
+      },
+    })
+
+    if (deptRes.data) {
+      for (const dept of deptRes.data) {
+        const teacherIds = dept.teacher_id || []
+        const isAssigned = teacherIds.some((t: any) => {
+          const tId = typeof t === 'object' ? (t.Teachers_id || t.id) : t
+          return tId === teacherId
+        })
+        if (isAssigned) return true
+      }
+    }
+    return false
+  }
+  catch (error) {
+    console.error('Error checking teacher department:', error)
+    return false
+  }
+}
+
+// Assign teacher to department if not already assigned
+const assignTeacherToDepartment = async (teacherId: number, departmentId: number): Promise<void> => {
+  try {
+    // First check if already assigned
+    const hasDept = await checkTeacherHasDepartment(teacherId)
+    if (hasDept) return // Already has a department, don't change
+
+    // Get current department data
+    const deptRes = await $api(`/items/Department/${departmentId}`, {
+      params: {
+        fields: ['id', 'teacher_id.id', 'teacher_id.Teachers_id'],
+      },
+    })
+
+    if (deptRes.data) {
+      // Preserve existing entries and add new one
+      const updatedTeacherIds = [
+        ...(deptRes.data.teacher_id || []).map((t: any) => {
+          if (typeof t === 'object' && t.id) {
+            return { id: t.id, Teachers_id: t.Teachers_id }
+          }
+          return { Teachers_id: typeof t === 'number' ? t : t.Teachers_id }
+        }),
+        { Teachers_id: teacherId },
+      ]
+
+      await $api(`/items/Department/${departmentId}`, {
+        method: 'PATCH',
+        body: { teacher_id: updatedTeacherIds },
+      })
+    }
+  }
+  catch (error) {
+    console.error('Error assigning teacher to department:', error)
+  }
+}
+
+// Find or create teacher by full name
+const findOrCreateTeacher = async (fullName: string): Promise<{ id: number; created: boolean }> => {
+  // Parse "First Last" into first_name and last_name
+  const nameParts = fullName.trim().split(/\s+/)
+  const firstName = nameParts[0] || ''
+  const lastName = nameParts.slice(1).join(' ') || ''
+
+  // Search for existing teacher by first + last name
+  try {
+    const existingRes = await $api('/items/Teachers', {
+      params: {
+        filter: {
+          _and: [
+            { first_name: { _eq: firstName } },
+            { last_name: { _eq: lastName } },
+          ],
+        },
+        fields: ['id'],
+      },
+    })
+
+    if (existingRes.data && existingRes.data.length > 0) {
+      return { id: existingRes.data[0].id, created: false }
+    }
+  }
+  catch (error) {
+    console.error('Error checking existing teacher:', error)
+  }
+
+  // Create new teacher with minimal data
+  const createRes = await $api('/items/Teachers', {
+    method: 'POST',
+    body: {
+      first_name: firstName,
+      last_name: lastName,
+      middle_name: '',
+      position: 'Professor',
+      gender: 'M',
+      email: '',
+      is_active: 'Active',
+    },
+  })
+
+  // Refresh teachers list
+  await fetchTeachers()
+
+  return { id: createRes.data.id, created: true }
 }
 
 // Execute the import
@@ -887,14 +1176,47 @@ const executeImport = async () => {
     const courseId = await findOrCreateCourse(data.courseCode, data.courseName)
     details.push(`Course ready (ID: ${courseId})`)
 
-    // Step 1.5: Use selected teacher
-    const teacherId = selectedTeacherForImport.value
-    if (teacherId) {
+    // Step 1.25: Ensure section exists in ClassSection table
+    details.push(`Checking if section "${data.section}" exists in ClassSection...`)
+    await ensureSectionExists(data.section, selectedDepartmentForImport.value!)
+    details.push(`Section ready in ClassSection table`)
+
+    // Step 1.5: Find or create teacher from CSV, or use selected teacher
+    let teacherId: number | null = null
+
+    if (data.teacherName) {
+      // Teacher name found in CSV - find or create
+      details.push(`Finding/creating teacher: ${data.teacherName}`)
+      const teacherResult = await findOrCreateTeacher(data.teacherName)
+      teacherId = teacherResult.id
+      if (teacherResult.created) {
+        details.push(`Created new teacher (ID: ${teacherId})`)
+      }
+      else {
+        details.push(`Found existing teacher (ID: ${teacherId})`)
+      }
+    }
+    else if (selectedTeacherForImport.value) {
+      // Fall back to manually selected teacher
+      teacherId = selectedTeacherForImport.value
       const teacher = teacherOptions.value.find(t => t.id === teacherId)
       details.push(`Teacher selected: ${teacher?.title || teacherId}`)
     }
     else {
       details.push(`No teacher selected for this class`)
+    }
+
+    // Assign teacher to department if they don't have one assigned
+    if (teacherId && selectedDepartmentForImport.value) {
+      details.push(`Checking teacher's department assignment...`)
+      const hasDept = await checkTeacherHasDepartment(teacherId)
+      if (!hasDept) {
+        await assignTeacherToDepartment(teacherId, selectedDepartmentForImport.value)
+        details.push(`Assigned teacher to department`)
+      }
+      else {
+        details.push(`Teacher already has a department assigned, keeping existing`)
+      }
     }
 
     // Step 2: Create students
@@ -941,11 +1263,12 @@ const executeImport = async () => {
       // Merge with new students (avoid duplicates)
       const allStudentIds = [...new Set([...existingStudentIds, ...studentIds])]
 
-      // Update class with all students
+      // Update class with all students and year_level
       await $api(`/items/classes/${classId}`, {
         method: 'PATCH',
         body: {
           student_id: allStudentIds.map(id => ({ students_id: id })),
+          year_level: selectedYearLevelForImport.value,
         },
       })
 
@@ -962,6 +1285,7 @@ const executeImport = async () => {
         department_id: [{ Department_id: selectedDepartmentForImport.value }],
         student_id: studentIds.map(id => ({ students_id: id })),
         teacher_id: teacherId,
+        year_level: selectedYearLevelForImport.value,
       }
 
       const classRes = await $api('/items/classes', {
@@ -1051,6 +1375,7 @@ const resetImport = () => {
   selectedAcadTermForImport.value = null
   selectedDepartmentForImport.value = null
   selectedTeacherForImport.value = null
+  selectedYearLevelForImport.value = null
 }
 
 // Fetch data on mount
@@ -1135,6 +1460,18 @@ onMounted(() => {
             </template>
             {{ getCourseName(item) }}
           </VTooltip>
+        </template>
+
+        <template #item.year_level="{ item }">
+          <VChip
+            v-if="item.year_level"
+            size="small"
+            variant="tonal"
+            color="info"
+          >
+            {{ getYearLevelDisplay(item.year_level) }}
+          </VChip>
+          <span v-else class="text-medium-emphasis">-</span>
         </template>
 
         <template #item.teacher="{ item }">
@@ -1248,6 +1585,17 @@ onMounted(() => {
               />
             </VCol>
             <VCol cols="12" md="6">
+              <VSelect
+                v-model="form.year_level"
+                label="Year Level"
+                :items="YEAR_LEVEL_OPTIONS"
+                item-title="title"
+                item-value="value"
+                variant="outlined"
+                placeholder="Select year level..."
+              />
+            </VCol>
+            <VCol cols="12">
               <VAutocomplete
                 v-model="form.acadTerm_id"
                 label="Academic Term"
@@ -1452,7 +1800,7 @@ onMounted(() => {
                 Expected CSV Format:
               </div>
               <div class="text-body-2">
-                The CSV should contain: semester info, course code & name, section, and student list with columns: No., Student No., Last Name, First Name, MI, Gender, Email, Program/Section
+                The CSV should contain: semester info, course code & name, section, and student list with columns: No., Student No., Last Name, First Name, MI, Gender, Email, Year Level, Program/Section
               </div>
             </VAlert>
 
@@ -1510,7 +1858,7 @@ onMounted(() => {
                   </div>
                 </VCard>
               </VCol>
-              <VCol cols="12" md="6">
+              <VCol cols="12" md="3">
                 <VCard
                   variant="outlined"
                   class="pa-4"
@@ -1523,10 +1871,26 @@ onMounted(() => {
                   </div>
                 </VCard>
               </VCol>
+              <VCol v-if="parsedImportData.teacherName" cols="12" md="3">
+                <VCard
+                  variant="outlined"
+                  class="pa-4"
+                >
+                  <div class="text-overline text-medium-emphasis mb-1">
+                    Teacher (from CSV)
+                  </div>
+                  <div class="text-h6">
+                    {{ parsedImportData.teacherName }}
+                  </div>
+                  <div class="text-caption text-medium-emphasis">
+                    Will be created if not existing
+                  </div>
+                </VCard>
+              </VCol>
             </VRow>
 
             <VRow class="mb-4">
-              <VCol cols="12" md="4">
+              <VCol cols="12">
                 <VSelect
                   v-model="selectedAcadTermForImport"
                   label="Academic Term *"
@@ -1555,6 +1919,8 @@ onMounted(() => {
                   </template>
                 </VSelect>
               </VCol>
+            </VRow>
+            <VRow class="mb-4">
               <VCol cols="12" md="4">
                 <VSelect
                   v-model="selectedDepartmentForImport"
@@ -1578,6 +1944,20 @@ onMounted(() => {
                 </VSelect>
               </VCol>
               <VCol cols="12" md="4">
+                <VSelect
+                  v-model="selectedYearLevelForImport"
+                  label="Year Level"
+                  :items="YEAR_LEVEL_OPTIONS"
+                  item-title="title"
+                  item-value="value"
+                  variant="outlined"
+                  placeholder="Select year level..."
+                  clearable
+                  :hint="selectedYearLevelForImport ? 'Auto-detected from section' : ''"
+                  persistent-hint
+                />
+              </VCol>
+              <VCol v-if="!parsedImportData.teacherName" cols="12" md="4">
                 <VSelect
                   v-model="selectedTeacherForImport"
                   label="Teacher"
@@ -1620,6 +2000,7 @@ onMounted(() => {
                     <th>M.I.</th>
                     <th>Gender</th>
                     <th>Email</th>
+                    <th>Year</th>
                     <th>Section</th>
                   </tr>
                 </thead>
@@ -1635,11 +2016,12 @@ onMounted(() => {
                     <td>{{ student.middleInitial || '-' }}</td>
                     <td>{{ student.gender || '-' }}</td>
                     <td>{{ student.email || '-' }}</td>
+                    <td>{{ student.yearLevel || '-' }}</td>
                     <td>{{ student.programSection }}</td>
                   </tr>
                   <tr v-if="parsedImportData.students.length > 10">
                     <td
-                      colspan="8"
+                      colspan="9"
                       class="text-center text-medium-emphasis"
                     >
                       ... and {{ parsedImportData.students.length - 10 }} more students

@@ -5,6 +5,7 @@ definePage({
   meta: {
     action: 'read',
     subject: 'StudentDashboard',
+    allowedRoles: ['student'],
   },
 })
 
@@ -65,10 +66,10 @@ const hasPermissionError = ref(false)
 const permissionErrorMessage = ref('')
 
 const stats = ref({
-  totalSurveys: 0,
-  pendingSurveys: 0,
-  completedSurveys: 0,
-  completionRate: 0,
+  totalSurveys: null as number | null,
+  pendingSurveys: null as number | null,
+  completedSurveys: null as number | null,
+  completionRate: null as number | null,
 })
 
 const pendingEvaluations = ref<PendingEvaluation[]>([])
@@ -134,7 +135,7 @@ const fetchStudentClasses = async () => {
       },
     })
 
-    studentClasses.value = res.data || []
+    studentClasses.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch student classes:', error)
@@ -178,7 +179,7 @@ const fetchStats = async () => {
     const studentId = userData?.student_id ? Number(userData.student_id) : null
 
     if (!studentId) {
-      stats.value = { totalSurveys: 0, pendingSurveys: 0, completedSurveys: 0, completionRate: 0 }
+      stats.value = { totalSurveys: null, pendingSurveys: null, completedSurveys: null, completionRate: null }
       return
     }
 
@@ -197,7 +198,7 @@ const fetchStats = async () => {
       },
     })
 
-    const allSurveys = surveysRes.data || []
+    const allSurveys = surveysRes.data
     const studentClassIds = studentClasses.value.map(c => c.id)
 
     // Count surveys assigned to this student
@@ -244,17 +245,16 @@ const fetchStats = async () => {
         aggregate: { count: '*' },
       },
     })
-    stats.value.completedSurveys = Number(completedRes.data?.[0]?.count) || 0
+    stats.value.completedSurveys = Number(completedRes.data?.[0]?.count)
 
     // Calculate pending
-    stats.value.pendingSurveys = Math.max(0, stats.value.totalSurveys - stats.value.completedSurveys)
+    if (stats.value.totalSurveys !== null && stats.value.completedSurveys !== null) {
+      stats.value.pendingSurveys = Math.max(0, stats.value.totalSurveys - stats.value.completedSurveys)
+    }
 
     // Calculate completion rate
-    if (stats.value.totalSurveys > 0) {
+    if (stats.value.totalSurveys !== null && stats.value.totalSurveys > 0 && stats.value.completedSurveys !== null) {
       stats.value.completionRate = Math.round((stats.value.completedSurveys / stats.value.totalSurveys) * 100)
-    }
-    else {
-      stats.value.completionRate = 0
     }
   }
   catch (error: any) {
@@ -295,7 +295,7 @@ const fetchPendingEvaluations = async () => {
       },
     })
 
-    const allSurveys = res.data || []
+    const allSurveys = res.data
 
     // Get completed responses for this student
     const completedRes = await $api('/items/StudentSurveyResponses', {
@@ -408,7 +408,7 @@ const fetchRecentActivity = async () => {
       },
     })
 
-    recentActivity.value = (res.data || []).map((r: any) => ({
+    recentActivity.value = (res.data).map((r: any) => ({
       id: r.id,
       surveyTitle: typeof r.survey_id === 'object' ? r.survey_id.title : `Survey #${r.survey_id}`,
       submittedAt: r.submitted_at,
@@ -422,7 +422,7 @@ const fetchRecentActivity = async () => {
 
 // Format date
 const formatDate = (dateStr: string): string => {
-  if (!dateStr) return '-'
+  if (!dateStr) return ''
   try {
     return new Date(dateStr).toLocaleDateString('en-US', {
       month: 'short',
@@ -444,7 +444,7 @@ const goToSurveys = () => {
 
 // Helper: Get class display name
 const getClassName = (classInfo?: ClassInfo): string => {
-  if (!classInfo) return '-'
+  if (!classInfo) return ''
   const courseCode = typeof classInfo.course_id === 'object' && classInfo.course_id
     ? classInfo.course_id.courseCode
     : ''
@@ -453,7 +453,7 @@ const getClassName = (classInfo?: ClassInfo): string => {
 
 // Helper: Get teacher name
 const getTeacherName = (teacher?: Teacher): string => {
-  if (!teacher) return '-'
+  if (!teacher) return ''
   return `${teacher.first_name} ${teacher.last_name}`
 }
 

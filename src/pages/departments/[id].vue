@@ -5,6 +5,7 @@ definePage({
   meta: {
     action: 'read',
     subject: 'departments',
+    allowedRoles: ['administrator'],
   },
 })
 

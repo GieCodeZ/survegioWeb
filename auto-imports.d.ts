@@ -7,7 +7,14 @@ export {}
 declare global {
   const $api: typeof import('./src/utils/api')['$api']
   const COOKIE_MAX_AGE_1_YEAR: typeof import('./src/utils/constants')['COOKIE_MAX_AGE_1_YEAR']
+  const DEFAULT_GENDER: typeof import('./src/utils/constants')['DEFAULT_GENDER']
+  const DEFAULT_STATUS: typeof import('./src/utils/constants')['DEFAULT_STATUS']
   const EffectScope: typeof import('vue')['EffectScope']
+  const GENDER_OPTIONS: typeof import('./src/utils/constants')['GENDER_OPTIONS']
+  const STATUS_OPTIONS: typeof import('./src/utils/constants')['STATUS_OPTIONS']
+  const STUDENT_EVALUATION_TYPE_OPTIONS: typeof import('./src/utils/constants')['STUDENT_EVALUATION_TYPE_OPTIONS']
+  const SURVEY_STATUS_OPTIONS: typeof import('./src/utils/constants')['SURVEY_STATUS_OPTIONS']
+  const YEAR_LEVEL_OPTIONS: typeof import('./src/utils/constants')['YEAR_LEVEL_OPTIONS']
   const acceptHMRUpdate: typeof import('pinia')['acceptHMRUpdate']
   const alphaDashValidator: typeof import('./src/@core/utils/validators')['alphaDashValidator']
   const alphaValidator: typeof import('./src/@core/utils/validators')['alphaValidator']
@@ -369,7 +376,14 @@ declare module 'vue' {
   interface ComponentCustomProperties {
     readonly $api: UnwrapRef<typeof import('./src/utils/api')['$api']>
     readonly COOKIE_MAX_AGE_1_YEAR: UnwrapRef<typeof import('./src/utils/constants')['COOKIE_MAX_AGE_1_YEAR']>
+    readonly DEFAULT_GENDER: UnwrapRef<typeof import('./src/utils/constants')['DEFAULT_GENDER']>
+    readonly DEFAULT_STATUS: UnwrapRef<typeof import('./src/utils/constants')['DEFAULT_STATUS']>
     readonly EffectScope: UnwrapRef<typeof import('vue')['EffectScope']>
+    readonly GENDER_OPTIONS: UnwrapRef<typeof import('./src/utils/constants')['GENDER_OPTIONS']>
+    readonly STATUS_OPTIONS: UnwrapRef<typeof import('./src/utils/constants')['STATUS_OPTIONS']>
+    readonly STUDENT_EVALUATION_TYPE_OPTIONS: UnwrapRef<typeof import('./src/utils/constants')['STUDENT_EVALUATION_TYPE_OPTIONS']>
+    readonly SURVEY_STATUS_OPTIONS: UnwrapRef<typeof import('./src/utils/constants')['SURVEY_STATUS_OPTIONS']>
+    readonly YEAR_LEVEL_OPTIONS: UnwrapRef<typeof import('./src/utils/constants')['YEAR_LEVEL_OPTIONS']>
     readonly acceptHMRUpdate: UnwrapRef<typeof import('pinia')['acceptHMRUpdate']>
     readonly alphaDashValidator: UnwrapRef<typeof import('./src/@core/utils/validators')['alphaDashValidator']>
     readonly alphaValidator: UnwrapRef<typeof import('./src/@core/utils/validators')['alphaValidator']>

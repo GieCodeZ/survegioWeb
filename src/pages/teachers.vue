@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { $api } from '@/utils/api';
+import { $api } from '@/utils/api'
+import { DEFAULT_GENDER, DEFAULT_STATUS, GENDER_OPTIONS, STATUS_OPTIONS } from '@/utils/constants'
 
 definePage({
   meta: {
     action: 'read',
     subject: 'teachers',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -67,10 +69,11 @@ const form = ref({
   middle_name: '',
   last_name: '',
   position: '',
-  gender: '',
+  gender: DEFAULT_GENDER,
   email: '',
   Department: null as number[] | null,
-  is_active: 'Active' as string,
+  department_id: null as number | null,
+  is_active: DEFAULT_STATUS as string,
   user_id: null as string | null,
 })
 
@@ -79,16 +82,14 @@ const departmentFilter = ref<number | null>(null)
 const statusFilter = ref<string | null>(null)
 const positionFilter = ref<string | null>(null)
 
-// Options
-const positionOptions = ['Dean', 'Professor']
-const genderOptions = ['M', 'F']
-const statusOptions = ['Active', 'Draft', 'Archived']
+// Position options
+const POSITION_OPTIONS = ['Dean', 'Professor']
 
 // Department options for filter dropdown
 const departmentOptions = computed(() => {
   return departments.value.map(dept => ({
     id: dept.id,
-    title: typeof dept.name === 'object' && dept.name !== null ? dept.name.programCode : '-',
+    title: typeof dept.name === 'object' && dept.name !== null ? dept.name.programCode : '',
   }))
 })
 
@@ -107,6 +108,50 @@ const isTeacherInDepartment = (teacher: Teacher, deptId: number): boolean => {
     const tId = typeof t === 'object' ? (t.Teachers_id || t.id) : t
     return tId === teacher.id
   })
+}
+
+// Get the existing Dean for a department (returns teacher ID or null)
+const getDepartmentDean = (deptId: number): Teacher | null => {
+  const dept = departments.value.find(d => d.id === deptId)
+  if (!dept) return null
+
+  const teacherIds = dept.teacher_id || []
+
+  for (const t of teacherIds) {
+    const tId = typeof t === 'object' ? (t.Teachers_id || t.id) : t
+    const teacher = teachers.value.find(teach => teach.id === tId)
+    if (teacher && teacher.position === 'Dean') {
+      return teacher
+    }
+  }
+
+  return null
+}
+
+// Check if trying to set Dean position when department already has one
+const existingDeanInDepartment = computed(() => {
+  // Only check if position is Dean and a department is selected
+  if (form.value.position !== 'Dean' || !form.value.department_id) {
+    return null
+  }
+
+  const existingDean = getDepartmentDean(form.value.department_id)
+
+  // If editing and the current teacher is already the Dean, allow it
+  if (existingDean && isEditing.value && form.value.id === existingDean.id) {
+    return null
+  }
+
+  return existingDean
+})
+
+// Get department name by ID
+const getDepartmentName = (deptId: number): string => {
+  const dept = departments.value.find(d => d.id === deptId)
+  if (dept && typeof dept.name === 'object' && dept.name !== null) {
+    return dept.name.programCode || dept.name.programName || ''
+  }
+  return ''
 }
 
 // Filtered teachers by department, status, and position
@@ -181,7 +226,7 @@ const fetchTeachers = async () => {
       },
     })
 
-    teachers.value = res.data || []
+    teachers.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch teachers:', error)
@@ -200,7 +245,7 @@ const fetchDepartments = async () => {
       },
     })
 
-    departments.value = res.data || []
+    departments.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch departments:', error)
@@ -216,7 +261,7 @@ const fetchRoles = async () => {
       },
     })
 
-    roles.value = res.data || []
+    roles.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch roles:', error)
@@ -226,7 +271,7 @@ const fetchRoles = async () => {
 // Get role ID by name
 const getRoleId = (roleName: string): string | null => {
   const role = roles.value.find(r => r.name.toLowerCase() === roleName.toLowerCase())
-  return role?.id || null
+  return role?.id
 }
 
 // Open dialog for creating new teacher
@@ -238,18 +283,42 @@ const openCreateDialog = () => {
     middle_name: '',
     last_name: '',
     position: '',
-    gender: '',
+    gender: DEFAULT_GENDER,
     email: '',
     Department: null,
-    is_active: 'Active',
+    department_id: null,
+    is_active: DEFAULT_STATUS,
     user_id: null,
   }
   isDialogOpen.value = true
 }
 
+// Get the first department ID for a teacher (for editing)
+const getTeacherDepartmentId = (teacher: Teacher): number | null => {
+  if (!teacher.id) return null
+
+  for (const dept of departments.value) {
+    const teacherIds = dept.teacher_id || []
+    const isAssigned = teacherIds.some((t: any) => {
+      const tId = typeof t === 'object' ? (t.Teachers_id || t.id) : t
+      return tId === teacher.id
+    })
+
+    if (isAssigned) {
+      return dept.id
+    }
+  }
+
+  return null
+}
+
 // Open dialog for editing teacher
 const openEditDialog = (teacher: Teacher) => {
   isEditing.value = true
+
+  // Get the teacher's current department from the junction table
+  const currentDeptId = getTeacherDepartmentId(teacher)
+
   form.value = {
     id: teacher.id,
     first_name: teacher.first_name,
@@ -259,16 +328,18 @@ const openEditDialog = (teacher: Teacher) => {
     gender: teacher.gender,
     email: teacher.email,
     Department: teacher.Department || null,
-    is_active: teacher.is_active || 'Active',
+    department_id: currentDeptId,
+    is_active: teacher.is_active,
     user_id: teacher.user_id || null,
   }
   isDialogOpen.value = true
 }
 
 // Open delete confirmation dialog
-const openDeleteDialog = (teacher: Teacher) => {
+const openDeleteDialog = async (teacher: Teacher) => {
   selectedTeacher.value = teacher
   isDeleteDialogOpen.value = true
+  await checkTeacherDeletion(teacher)
 }
 
 // Update Directus user status based on is_active
@@ -290,6 +361,71 @@ const updateUserStatus = async (userId: string, isActive: string) => {
   }
 }
 
+// Update teacher's department assignment (M2M via Department.teacher_id)
+const updateTeacherDepartment = async (teacherId: number, newDeptId: number | null, oldDeptId: number | null) => {
+  try {
+    // Remove from old department if changing
+    if (oldDeptId && oldDeptId !== newDeptId) {
+      const oldDept = departments.value.find(d => d.id === oldDeptId)
+      if (oldDept) {
+        // Get current teacher_id entries, excluding the current teacher
+        const updatedTeacherIds = (oldDept.teacher_id || [])
+          .filter((t: any) => {
+            const tId = typeof t === 'object' ? (t.Teachers_id || t.id) : t
+            return tId !== teacherId
+          })
+          .map((t: any) => {
+            if (typeof t === 'object' && t.id) {
+              return { id: t.id, Teachers_id: t.Teachers_id }
+            }
+            return { Teachers_id: typeof t === 'number' ? t : t.Teachers_id }
+          })
+
+        await $api(`/items/Department/${oldDeptId}`, {
+          method: 'PATCH',
+          body: { teacher_id: updatedTeacherIds },
+        })
+      }
+    }
+
+    // Add to new department
+    if (newDeptId) {
+      const newDept = departments.value.find(d => d.id === newDeptId)
+      if (newDept) {
+        // Check if already in this department
+        const alreadyAssigned = (newDept.teacher_id || []).some((t: any) => {
+          const tId = typeof t === 'object' ? (t.Teachers_id || t.id) : t
+          return tId === teacherId
+        })
+
+        if (!alreadyAssigned) {
+          // Preserve existing entries and add new one
+          const updatedTeacherIds = [
+            ...(newDept.teacher_id || []).map((t: any) => {
+              if (typeof t === 'object' && t.id) {
+                return { id: t.id, Teachers_id: t.Teachers_id }
+              }
+              return { Teachers_id: typeof t === 'number' ? t : t.Teachers_id }
+            }),
+            { Teachers_id: teacherId },
+          ]
+
+          await $api(`/items/Department/${newDeptId}`, {
+            method: 'PATCH',
+            body: { teacher_id: updatedTeacherIds },
+          })
+        }
+      }
+    }
+
+    // Refresh departments to update the local state
+    await fetchDepartments()
+  }
+  catch (error) {
+    console.error('Failed to update teacher department:', error)
+  }
+}
+
 // Save teacher (create or update)
 const saveTeacher = async () => {
   try {
@@ -303,7 +439,14 @@ const saveTeacher = async () => {
       is_active: form.value.is_active,
     }
 
+    let teacherId: number | undefined
+
     if (isEditing.value && form.value.id) {
+      teacherId = form.value.id
+
+      // Get the old department before updating
+      const oldDeptId = getTeacherDepartmentId({ id: teacherId } as Teacher)
+
       // Update existing teacher
       await $api(`/items/Teachers/${form.value.id}`, {
         method: 'PATCH',
@@ -313,13 +456,24 @@ const saveTeacher = async () => {
       // Update user account status if teacher has an account
       if (form.value.user_id)
         await updateUserStatus(form.value.user_id, form.value.is_active)
+
+      // Update department assignment if changed
+      if (form.value.department_id !== oldDeptId) {
+        await updateTeacherDepartment(teacherId, form.value.department_id, oldDeptId)
+      }
     }
     else {
       // Create new teacher
-      await $api('/items/Teachers', {
+      const res = await $api('/items/Teachers', {
         method: 'POST',
         body,
       })
+      teacherId = res.data.id
+
+      // Assign to department if selected
+      if (form.value.department_id && teacherId) {
+        await updateTeacherDepartment(teacherId, form.value.department_id, null)
+      }
     }
 
     isDialogOpen.value = false
@@ -330,18 +484,71 @@ const saveTeacher = async () => {
   }
 }
 
+// State for deletion checks
+const isCheckingDeletion = ref(false)
+const deletionBlockedReason = ref<string | null>(null)
+const teacherClasses = ref<any[]>([])
+
+// Check if teacher can be deleted
+const checkTeacherDeletion = async (teacher: Teacher) => {
+  isCheckingDeletion.value = true
+  deletionBlockedReason.value = null
+  teacherClasses.value = []
+
+  try {
+    // Check if teacher is assigned to any classes
+    const classesRes = await $api('/items/classes', {
+      params: {
+        filter: { teacher_id: { _eq: teacher.id } },
+        fields: ['id', 'section', 'course_id.courseCode', 'acadTerm_id.schoolYear', 'acadTerm_id.semester'],
+      },
+    })
+
+    if (classesRes.data && classesRes.data.length > 0) {
+      teacherClasses.value = classesRes.data
+      deletionBlockedReason.value = 'classes'
+    }
+  }
+  catch (error) {
+    console.error('Failed to check teacher deletion:', error)
+  }
+  finally {
+    isCheckingDeletion.value = false
+  }
+}
+
 // Delete teacher
 const deleteTeacher = async () => {
   if (!selectedTeacher.value?.id)
     return
 
+  // Don't allow deletion if teacher has classes
+  if (deletionBlockedReason.value === 'classes') {
+    return
+  }
+
   try {
+    // Delete the Directus user account if exists (like students)
+    if (selectedTeacher.value.user_id) {
+      try {
+        await $api(`/users/${selectedTeacher.value.user_id}`, {
+          method: 'DELETE',
+        })
+      }
+      catch (error) {
+        console.error('Failed to delete user account:', error)
+      }
+    }
+
+    // Delete the teacher record
     await $api(`/items/Teachers/${selectedTeacher.value.id}`, {
       method: 'DELETE',
     })
 
     isDeleteDialogOpen.value = false
     selectedTeacher.value = null
+    deletionBlockedReason.value = null
+    teacherClasses.value = []
     await fetchTeachers()
   }
   catch (error) {
@@ -578,7 +785,7 @@ onMounted(() => {
         />
         <VSelect
           v-model="statusFilter"
-          :items="statusOptions"
+          :items="STATUS_OPTIONS"
           label="Status"
           density="compact"
           variant="outlined"
@@ -589,7 +796,7 @@ onMounted(() => {
         />
         <VSelect
           v-model="positionFilter"
-          :items="positionOptions"
+          :items="POSITION_OPTIONS"
           label="Position"
           density="compact"
           variant="outlined"
@@ -769,7 +976,7 @@ onMounted(() => {
               <VSelect
                 v-model="form.position"
                 label="Position"
-                :items="positionOptions"
+                :items="POSITION_OPTIONS"
                 variant="outlined"
                 :rules="[v => !!v || 'Position is required']"
               />
@@ -778,7 +985,7 @@ onMounted(() => {
               <VSelect
                 v-model="form.gender"
                 label="Gender"
-                :items="genderOptions"
+                :items="GENDER_OPTIONS"
                 variant="outlined"
                 :rules="[v => !!v || 'Gender is required']"
               />
@@ -787,20 +994,52 @@ onMounted(() => {
               <VSelect
                 v-model="form.is_active"
                 label="Status"
-                :items="statusOptions"
+                :items="STATUS_OPTIONS"
                 variant="outlined"
                 :rules="[v => !!v || 'Status is required']"
               />
+            </VCol>
+            <VCol cols="12" md="6">
+              <VSelect
+                v-model="form.department_id"
+                label="Department"
+                :items="departmentOptions"
+                item-title="title"
+                item-value="id"
+                variant="outlined"
+                placeholder="Select department..."
+                clearable
+              >
+                <template #item="{ item, props }">
+                  <VListItem v-bind="props">
+                    <template #title>
+                      {{ item.raw.title }}
+                    </template>
+                  </VListItem>
+                </template>
+              </VSelect>
             </VCol>
             <VCol cols="12">
               <VTextField
                 v-model="form.email"
                 label="Email"
-                placeholder="Enter email address"
+                placeholder="Enter email address (optional)"
                 type="email"
                 variant="outlined"
-                :rules="[v => !!v || 'Email is required', v => /.+@.+\..+/.test(v) || 'Email must be valid']"
+                :rules="[v => !v || /.+@.+\..+/.test(v) || 'Email must be valid']"
               />
+            </VCol>
+            <VCol v-if="existingDeanInDepartment" cols="12">
+              <VAlert
+                type="error"
+                variant="tonal"
+                density="compact"
+              >
+                <template #title>
+                  Cannot assign Dean position
+                </template>
+                The {{ getDepartmentName(form.department_id!) }} department already has a Dean: <strong>{{ existingDeanInDepartment.last_name }}, {{ existingDeanInDepartment.first_name }}</strong>. Each department can only have one Dean.
+              </VAlert>
             </VCol>
           </VRow>
         </VCardText>
@@ -817,7 +1056,7 @@ onMounted(() => {
           </VBtn>
           <VBtn
             color="primary"
-            :disabled="!form.first_name || !form.last_name || !form.position || !form.gender || !form.email"
+            :disabled="!form.first_name || !form.last_name || !form.position || !form.gender || !!existingDeanInDepartment"
             @click="saveTeacher"
           >
             {{ isEditing ? 'Update' : 'Create' }}
@@ -829,18 +1068,80 @@ onMounted(() => {
     <!-- Delete Confirmation Dialog -->
     <VDialog
       v-model="isDeleteDialogOpen"
-      max-width="400"
+      max-width="500"
     >
       <VCard>
-        <VCardTitle class="pa-6">
+        <VCardTitle class="pa-6 d-flex align-center gap-2">
+          <VIcon icon="ri-error-warning-line" color="error" />
           Delete Teacher
         </VCardTitle>
 
         <VDivider />
 
         <VCardText class="pa-6">
-          Are you sure you want to delete <strong>{{ selectedTeacher ? getFullName(selectedTeacher) : '' }}</strong>?
-          This action cannot be undone.
+          <!-- Loading state -->
+          <div v-if="isCheckingDeletion" class="d-flex justify-center pa-4">
+            <VProgressCircular indeterminate color="primary" />
+          </div>
+
+          <template v-else>
+            <!-- Blocked: Teacher has classes -->
+            <template v-if="deletionBlockedReason === 'classes'">
+              <VAlert
+                type="error"
+                variant="tonal"
+                class="mb-4"
+              >
+                <template #title>
+                  Cannot Delete Teacher
+                </template>
+                This teacher is currently assigned to {{ teacherClasses.length }} class(es). Please reassign or remove them from all classes before deleting.
+              </VAlert>
+
+              <p class="text-subtitle-2 mb-2">Assigned Classes:</p>
+              <VList density="compact" class="mb-4">
+                <VListItem
+                  v-for="cls in teacherClasses"
+                  :key="cls.id"
+                  density="compact"
+                >
+                  <template #prepend>
+                    <VIcon icon="ri-book-line" size="small" />
+                  </template>
+                  <VListItemTitle>
+                    {{ cls.course_id?.courseCode || 'Unknown Course' }} - Section {{ cls.section }}
+                  </VListItemTitle>
+                  <VListItemSubtitle>
+                    {{ cls.acadTerm_id?.schoolYear }} {{ cls.acadTerm_id?.semester }}
+                  </VListItemSubtitle>
+                </VListItem>
+              </VList>
+            </template>
+
+            <!-- Can delete -->
+            <template v-else>
+              <p class="mb-4">
+                Are you sure you want to delete <strong>{{ selectedTeacher ? getFullName(selectedTeacher) : '' }}</strong>?
+              </p>
+
+              <!-- Warning for user account -->
+              <VAlert
+                v-if="selectedTeacher?.user_id"
+                type="warning"
+                variant="tonal"
+                class="mb-3"
+              >
+                <template #title>
+                  User Account Will Be Deleted
+                </template>
+                This teacher has an associated user account. The account will be permanently deleted and they will no longer be able to log in.
+              </VAlert>
+
+              <p class="text-error font-weight-medium mb-0">
+                This action cannot be undone.
+              </p>
+            </template>
+          </template>
         </VCardText>
 
         <VDivider />
@@ -851,13 +1152,14 @@ onMounted(() => {
             variant="outlined"
             @click="isDeleteDialogOpen = false"
           >
-            Cancel
+            {{ deletionBlockedReason ? 'Close' : 'Cancel' }}
           </VBtn>
           <VBtn
+            v-if="!deletionBlockedReason && !isCheckingDeletion"
             color="error"
             @click="deleteTeacher"
           >
-            Delete
+            Delete Teacher
           </VBtn>
         </VCardActions>
       </VCard>

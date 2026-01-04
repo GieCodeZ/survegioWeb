@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { $api } from '@/utils/api'
+import { YEAR_LEVEL_OPTIONS } from '@/utils/constants'
 
 definePage({
   meta: {
     action: 'read',
     subject: 'surveys',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -40,6 +42,7 @@ interface SurveyForm {
   office_id: number | null
   assignment_mode: 'all' | 'department' | 'specific'
   student_percentage: number
+  target_year_levels: string[]
   question_group: StudentSurveyGroup[]
 }
 
@@ -63,6 +66,7 @@ interface SurveyResponse {
   class_id?: number
   office_id?: number | { id: number; name: string }
   submitted_at: string
+  year_level?: string
   answers?: SurveyAnswer[]
 }
 
@@ -82,6 +86,7 @@ interface ClassItem {
   teacher_id?: { id: number; first_name: string; last_name: string } | number | null
   acadTerm_id?: { id: number; schoolYear: string; semester: string } | number | null
   student_id?: { id: number }[]
+  year_level?: string
 }
 
 interface SchoolOffice {
@@ -98,6 +103,7 @@ interface StudentItem {
   student_number: string
   email?: string
   deparment_id?: number
+  year_level?: string
 }
 
 interface DepartmentOption {
@@ -209,6 +215,10 @@ const availableStudents = ref<StudentItem[]>([])
 const assignedStudentIds = ref<number[]>([])
 const studentSearch = ref('')
 
+// Year level filter state for assignment tab
+const classYearLevelFilter = ref<number | null>(null)
+const studentYearLevelFilter = ref<number | null>(null)
+
 // Department assignment state (for office-based surveys by department)
 const availableDepartments = ref<DepartmentOption[]>([])
 const assignedDepartmentIds = ref<number[]>([])
@@ -224,6 +234,7 @@ const form = ref<SurveyForm>({
   office_id: null,
   assignment_mode: 'all',
   student_percentage: 100,
+  target_year_levels: [],
   question_group: [],
 })
 
@@ -319,6 +330,12 @@ const formatDateDisplay = (dateStr: string): string => {
   catch {
     return dateStr
   }
+}
+
+// Get year level display text
+const getYearLevelDisplay = (yearLevel: string | undefined): string => {
+  if (!yearLevel) return '-'
+  return yearLevel
 }
 
 // Date picker computed properties
@@ -456,6 +473,7 @@ const fetchSurveyDetails = async () => {
       office_id: officeId || null,
       assignment_mode: data.assignment_mode || 'all',
       student_percentage: data.student_percentage ?? 100,
+      target_year_levels: data.target_year_levels || [],
       question_group: questionGroups,
     }
   }
@@ -474,7 +492,7 @@ const fetchResponses = async () => {
     const res = await $api('/items/StudentSurveyResponses', {
       params: {
         filter: { survey_id: { _eq: surveyId.value } },
-        fields: ['*', 'student_id.*', 'answers.*', 'answers.question_id.*'],
+        fields: ['*', 'year_level', 'student_id.*', 'answers.*', 'answers.question_id.*'],
         sort: ['-submitted_at'],
       },
     })
@@ -647,7 +665,7 @@ const fetchStudents = async () => {
   try {
     const res = await $api('/items/students', {
       params: {
-        fields: ['id', 'first_name', 'last_name', 'student_number', 'email', 'deparment_id'],
+        fields: ['id', 'first_name', 'last_name', 'student_number', 'email', 'deparment_id', 'year_level'],
         sort: ['last_name', 'first_name'],
         limit: -1,
       },
@@ -710,17 +728,28 @@ const fetchDepartments = async () => {
   }
 }
 
-// Filtered classes based on search
+// Filtered classes based on search and year level
 const filteredClasses = computed(() => {
-  if (!classSearch.value) return availableClasses.value
-  const search = classSearch.value.toLowerCase()
-  return availableClasses.value.filter(c => {
-    const section = c.section?.toLowerCase() || ''
-    const courseCode = typeof c.course_id === 'object' && c.course_id ? c.course_id.courseCode?.toLowerCase() || '' : ''
-    const courseName = typeof c.course_id === 'object' && c.course_id ? c.course_id.courseName?.toLowerCase() || '' : ''
-    const teacherName = typeof c.teacher_id === 'object' && c.teacher_id ? `${c.teacher_id.first_name} ${c.teacher_id.last_name}`.toLowerCase() : ''
-    return section.includes(search) || courseCode.includes(search) || courseName.includes(search) || teacherName.includes(search)
-  })
+  let result = availableClasses.value
+
+  // Apply year level filter
+  if (classYearLevelFilter.value) {
+    result = result.filter(c => c.year_level === classYearLevelFilter.value)
+  }
+
+  // Apply search filter
+  if (classSearch.value) {
+    const search = classSearch.value.toLowerCase()
+    result = result.filter(c => {
+      const section = c.section?.toLowerCase() || ''
+      const courseCode = typeof c.course_id === 'object' && c.course_id ? c.course_id.courseCode?.toLowerCase() || '' : ''
+      const courseName = typeof c.course_id === 'object' && c.course_id ? c.course_id.courseName?.toLowerCase() || '' : ''
+      const teacherName = typeof c.teacher_id === 'object' && c.teacher_id ? `${c.teacher_id.first_name} ${c.teacher_id.last_name}`.toLowerCase() : ''
+      return section.includes(search) || courseCode.includes(search) || courseName.includes(search) || teacherName.includes(search)
+    })
+  }
+
+  return result
 })
 
 // Toggle class assignment
@@ -791,14 +820,25 @@ const deselectAllClasses = () => {
 
 // ==================== STUDENT ASSIGNMENT HELPERS (for office-based surveys) ====================
 
-// Filtered students based on search (search by student number only for privacy)
+// Filtered students based on search and year level (search by student number only for privacy)
 const filteredStudents = computed(() => {
-  if (!studentSearch.value) return availableStudents.value
-  const search = studentSearch.value.toLowerCase()
-  return availableStudents.value.filter(s => {
-    const studentNumber = s.student_number?.toLowerCase() || ''
-    return studentNumber.includes(search)
-  })
+  let result = availableStudents.value
+
+  // Apply year level filter
+  if (studentYearLevelFilter.value) {
+    result = result.filter(s => s.year_level === studentYearLevelFilter.value)
+  }
+
+  // Apply search filter
+  if (studentSearch.value) {
+    const search = studentSearch.value.toLowerCase()
+    result = result.filter(s => {
+      const studentNumber = s.student_number?.toLowerCase() || ''
+      return studentNumber.includes(search)
+    })
+  }
+
+  return result
 })
 
 // Toggle student assignment
@@ -965,6 +1005,72 @@ const pendingByProgram = computed(() => {
   return Object.entries(byDepartment)
     .map(([id, data]) => ({ id: Number(id), ...data }))
     .sort((a, b) => b.count - a.count)
+})
+
+// ==================== YEAR LEVEL ANALYTICS ====================
+
+// Responses grouped by year level
+const responsesByYearLevel = computed(() => {
+  const stats: Record<string, {
+    yearLevel: string
+    yearLevelLabel: string
+    totalResponses: number
+    averageRating: number
+    ratingSum: number
+    ratingCount: number
+  }> = {}
+
+  // Initialize for all year levels
+  for (const opt of YEAR_LEVEL_OPTIONS) {
+    stats[opt.value] = {
+      yearLevel: opt.value,
+      yearLevelLabel: opt.title,
+      totalResponses: 0,
+      averageRating: 0,
+      ratingSum: 0,
+      ratingCount: 0,
+    }
+  }
+
+  // Count responses by year level (use year_level stored directly on response)
+  for (const response of responses.value) {
+    // Use year_level from response if available, fallback to looking up student
+    let yearLevel = response.year_level || ''
+
+    // Fallback: if no year_level on response, try to look up from student
+    if (!yearLevel) {
+      const student = typeof response.student_id === 'object' ? response.student_id : null
+      if (student) {
+        const studentItem = availableStudents.value.find(s => s.id === student.id)
+        yearLevel = studentItem?.year_level || ''
+      }
+    }
+
+    if (yearLevel && stats[yearLevel]) {
+      stats[yearLevel].totalResponses++
+
+      // Calculate rating from answers
+      if (response.answers) {
+        for (const answer of response.answers) {
+          const numVal = parseFloat(answer.answer_value)
+          if (!isNaN(numVal) && numVal >= 1 && numVal <= 5) {
+            stats[yearLevel].ratingSum += numVal
+            stats[yearLevel].ratingCount++
+          }
+        }
+      }
+    }
+  }
+
+  // Calculate averages
+  for (const key of Object.keys(stats)) {
+    const stat = stats[key]
+    if (stat.ratingCount > 0) {
+      stat.averageRating = stat.ratingSum / stat.ratingCount
+    }
+  }
+
+  return Object.values(stats).filter(s => s.totalResponses > 0)
 })
 
 // ==================== EXPORT REPORT FUNCTIONS ====================
@@ -1956,6 +2062,7 @@ const saveSurvey = async () => {
       evaluation_type: form.value.evaluation_type,
       office_id: form.value.evaluation_type === 'Office' ? form.value.office_id : null,
       assignment_mode: form.value.evaluation_type === 'Office' ? form.value.assignment_mode : null,
+      target_year_levels: form.value.target_year_levels.length > 0 ? form.value.target_year_levels : null,
       question_group: formattedQuestionGroups.length > 0 ? formattedQuestionGroups : [],
     }
 
@@ -2232,6 +2339,25 @@ onMounted(() => {
                 />
               </VCol>
 
+              <!-- Target Year Levels -->
+              <VCol cols="12" md="6">
+                <VSelect
+                  v-model="form.target_year_levels"
+                  :items="YEAR_LEVEL_OPTIONS"
+                  item-title="title"
+                  item-value="value"
+                  label="Target Year Levels"
+                  placeholder="All year levels"
+                  variant="outlined"
+                  multiple
+                  chips
+                  closable-chips
+                  clearable
+                  hint="Leave empty to target all year levels"
+                  persistent-hint
+                />
+              </VCol>
+
               <VCol cols="12">
                 <VTextarea
                   v-model="form.instruction"
@@ -2247,11 +2373,11 @@ onMounted(() => {
                 <h6 class="text-h6 mb-4">Schedule</h6>
               </VCol>
 
-              <VCol cols="12" md="4">
+              <VCol cols="12">
                 <VSelect
                   v-model="form.academic_term_id"
                   :items="academicTerms"
-                  :item-title="(item) => `${item.semester} - ${item.schoolYear}`"
+                  :item-title="(item) => `${item.schoolYear} - ${item.semester}`"
                   item-value="id"
                   label="Academic Term"
                   variant="outlined"
@@ -2545,6 +2671,17 @@ onMounted(() => {
                   hide-details
                   style="max-width: 300px;"
                 />
+                <VSelect
+                  v-model="classYearLevelFilter"
+                  :items="[{ value: null, title: 'All Years' }, ...YEAR_LEVEL_OPTIONS]"
+                  item-title="title"
+                  item-value="value"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                  style="max-width: 150px;"
+                  placeholder="Filter by year"
+                />
                 <VSpacer />
                 <VBtnGroup variant="outlined" density="compact">
                   <VBtn color="success" @click="selectAllClasses">
@@ -2757,6 +2894,17 @@ onMounted(() => {
                     hide-details
                     style="max-width: 300px;"
                   />
+                  <VSelect
+                    v-model="studentYearLevelFilter"
+                    :items="[{ value: null, title: 'All Years' }, ...YEAR_LEVEL_OPTIONS]"
+                    item-title="title"
+                    item-value="value"
+                    density="compact"
+                    variant="outlined"
+                    hide-details
+                    style="max-width: 150px;"
+                    placeholder="Filter by year"
+                  />
                   <VSpacer />
                   <VBtnGroup variant="outlined" density="compact">
                     <VBtn color="success" @click="selectAllStudents">
@@ -2855,60 +3003,55 @@ onMounted(() => {
 
           <!-- No Responses -->
           <div v-else-if="responses.length === 0" class="text-center pa-12">
-            <VIcon icon="ri-bar-chart-line" size="64" color="medium-emphasis" class="mb-4" />
-            <p class="text-h6 text-medium-emphasis mb-2">No Responses Yet</p>
+            <VIcon icon="ri-inbox-line" size="48" color="medium-emphasis" class="mb-4" />
+            <p class="text-subtitle-1 text-medium-emphasis mb-2">No Responses Yet</p>
             <p class="text-body-2 text-medium-emphasis">
-              When students submit their responses, you'll see the results here.
+              Responses will appear here once students submit them.
             </p>
           </div>
 
           <!-- Responses Summary -->
           <template v-else>
-            <!-- Compact Summary Bar -->
+            <!-- Summary Statistics -->
             <VCard variant="outlined" class="mb-6">
               <VCardText class="pa-4">
                 <div class="d-flex flex-wrap align-center justify-space-between gap-4">
-                  <div class="d-flex align-center gap-6">
-                    <div class="d-flex align-center gap-2">
-                      <VIcon icon="ri-checkbox-circle-line" color="success" size="20" />
-                      <span class="text-body-2 text-medium-emphasis">Responses:</span>
-                      <span class="font-weight-bold text-success">{{ responses.length }}</span>
+                  <div class="d-flex align-center gap-8">
+                    <div class="text-center">
+                      <div class="text-h5 font-weight-bold">{{ responses.length }}</div>
+                      <div class="text-caption text-medium-emphasis">Responses</div>
                     </div>
-                    <VDivider vertical class="my-2" />
-                    <div class="d-flex align-center gap-2">
-                      <VIcon icon="ri-time-line" color="warning" size="20" />
-                      <span class="text-body-2 text-medium-emphasis">Pending:</span>
-                      <span class="font-weight-bold text-warning">{{ pendingResponsesCount }}</span>
+                    <VDivider vertical class="align-self-stretch" />
+                    <div class="text-center">
+                      <div class="text-h5 font-weight-bold">{{ pendingResponsesCount }}</div>
+                      <div class="text-caption text-medium-emphasis">Pending</div>
                     </div>
-                    <VDivider vertical class="my-2" />
-                    <div class="d-flex align-center gap-2">
-                      <VIcon icon="ri-percent-line" color="primary" size="20" />
-                      <span class="text-body-2 text-medium-emphasis">Completion:</span>
-                      <span class="font-weight-bold text-primary">
+                    <VDivider vertical class="align-self-stretch" />
+                    <div class="text-center">
+                      <div class="text-h5 font-weight-bold">
                         {{ totalExpectedStudents > 0 ? Math.round((responses.length / totalExpectedStudents) * 100) : 0 }}%
-                      </span>
+                      </div>
+                      <div class="text-caption text-medium-emphasis">Completion Rate</div>
                     </div>
                   </div>
                   <div class="d-flex gap-2">
                     <VBtn
                       v-if="form.evaluation_type === 'Class' && classesWithResponses.length > 0"
-                      color="success"
-                      variant="tonal"
+                      color="primary"
+                      variant="outlined"
                       size="small"
-                      prepend-icon="ri-file-download-line"
                       @click="openExportDialog"
                     >
                       Export Report
                     </VBtn>
                     <VBtn
                       v-if="form.evaluation_type === 'Office' && responses.length > 0"
-                      color="success"
-                      variant="tonal"
+                      color="primary"
+                      variant="outlined"
                       size="small"
-                      prepend-icon="ri-file-download-line"
                       @click="openOfficeExportDialog"
                     >
-                      Export Office Report
+                      Export Report
                     </VBtn>
                   </div>
                 </div>
@@ -2917,10 +3060,8 @@ onMounted(() => {
 
             <!-- Professors Table (for Class evaluations) -->
             <VCard v-if="form.evaluation_type === 'Class' && instructorsWithResponses.length > 0" variant="outlined" class="mb-6">
-              <VCardTitle class="d-flex align-center pa-4">
-                <VIcon icon="ri-user-star-line" class="me-2" />
+              <VCardTitle class="pa-4 text-subtitle-1">
                 Professors
-                <VSpacer />
               </VCardTitle>
               <VDivider />
               <VDataTable
@@ -2932,35 +3073,25 @@ onMounted(() => {
                 @click:row="(_event: Event, { item }: { item: any }) => openProfessorDetail(item)"
               >
                 <template #item.name="{ item }">
-                  <div class="d-flex align-center gap-2">
-                    <span class="font-weight-medium text-primary">{{ item.name }}</span>
-                    <VIcon icon="ri-arrow-right-s-line" size="16" color="primary" />
-                  </div>
+                  <span class="font-weight-medium">{{ item.name }}</span>
                 </template>
 
                 <template #item.classCount="{ item }">
-                  <VChip size="small" variant="tonal" color="info">
-                    {{ item.classCount }}
-                  </VChip>
+                  {{ item.classCount }}
                 </template>
 
                 <template #item.responseCount="{ item }">
-                  <span :class="item.responseCount > 0 ? 'font-weight-medium' : 'text-medium-emphasis'">
-                    {{ item.responseCount }}
-                  </span>
+                  {{ item.responseCount }}
                 </template>
 
                 <template #item.averageRating="{ item }">
-                  <div v-if="item.averageRating > 0" class="d-flex align-center justify-center gap-2">
-                    <span class="font-weight-bold">{{ item.averageRating.toFixed(2) }}</span>
-                    <VChip
-                      size="x-small"
-                      :color="item.averageRating >= 4 ? 'success' : item.averageRating >= 3 ? 'warning' : 'error'"
-                      variant="tonal"
-                    >
-                      / 5
-                    </VChip>
-                  </div>
+                  <span
+                    v-if="item.averageRating > 0"
+                    class="font-weight-medium"
+                    :class="item.averageRating >= 4 ? 'text-success' : item.averageRating >= 3 ? 'text-warning' : 'text-error'"
+                  >
+                    {{ item.averageRating.toFixed(2) }}
+                  </span>
                   <span v-else class="text-medium-emphasis">-</span>
                 </template>
 
@@ -2974,13 +3105,8 @@ onMounted(() => {
 
             <!-- Offices Table (for Office evaluations) -->
             <VCard v-if="form.evaluation_type === 'Office' && officesWithResponses.length > 0" variant="outlined" class="mb-6">
-              <VCardTitle class="d-flex align-center pa-4">
-                <VIcon icon="ri-building-2-line" class="me-2" />
+              <VCardTitle class="pa-4 text-subtitle-1">
                 School Offices
-                <VSpacer />
-                <VChip size="small" color="primary" variant="tonal">
-                  {{ officesWithResponses.length }} office(s)
-                </VChip>
               </VCardTitle>
               <VDivider />
               <VDataTable
@@ -2992,29 +3118,21 @@ onMounted(() => {
                 @click:row="(_event: Event, { item }: { item: any }) => openOfficeDetail(item)"
               >
                 <template #item.name="{ item }">
-                  <div class="d-flex align-center gap-2">
-                    <span class="font-weight-medium text-primary">{{ item.name }}</span>
-                    <VIcon icon="ri-arrow-right-s-line" size="16" color="primary" />
-                  </div>
+                  <span class="font-weight-medium">{{ item.name }}</span>
                 </template>
 
                 <template #item.responseCount="{ item }">
-                  <span :class="item.responseCount > 0 ? 'font-weight-medium' : 'text-medium-emphasis'">
-                    {{ item.responseCount }}
-                  </span>
+                  {{ item.responseCount }}
                 </template>
 
                 <template #item.averageRating="{ item }">
-                  <div v-if="item.averageRating > 0" class="d-flex align-center justify-center gap-2">
-                    <span class="font-weight-bold">{{ item.averageRating.toFixed(2) }}</span>
-                    <VChip
-                      size="x-small"
-                      :color="item.averageRating >= 4 ? 'success' : item.averageRating >= 3 ? 'warning' : 'error'"
-                      variant="tonal"
-                    >
-                      / 5
-                    </VChip>
-                  </div>
+                  <span
+                    v-if="item.averageRating > 0"
+                    class="font-weight-medium"
+                    :class="item.averageRating >= 4 ? 'text-success' : item.averageRating >= 3 ? 'text-warning' : 'text-error'"
+                  >
+                    {{ item.averageRating.toFixed(2) }}
+                  </span>
                   <span v-else class="text-medium-emphasis">-</span>
                 </template>
 
@@ -3026,23 +3144,15 @@ onMounted(() => {
               </VDataTable>
             </VCard>
 
-            <!-- Pending by Program (compact) -->
+            <!-- Pending by Program -->
             <VCard v-if="pendingResponsesCount > 0 && pendingByProgram.length > 0" variant="outlined" class="mb-6">
               <VCardText class="pa-4">
-                <div class="d-flex align-center gap-2 mb-3">
-                  <VIcon icon="ri-time-line" color="warning" size="20" />
-                  <span class="font-weight-medium">Pending by Program</span>
-                </div>
-                <div class="d-flex flex-wrap gap-2">
-                  <VChip
-                    v-for="prog in pendingByProgram"
+                <div class="text-subtitle-2 mb-3">Pending by Program</div>
+                <div class="text-body-2 text-medium-emphasis">
+                  <span
+                    v-for="(prog, index) in pendingByProgram"
                     :key="prog.id"
-                    size="small"
-                    color="warning"
-                    variant="tonal"
-                  >
-                    {{ prog.name }}: {{ prog.count }}
-                  </VChip>
+                  >{{ prog.name }}: {{ prog.count }}<span v-if="index < pendingByProgram.length - 1">, </span></span>
                 </div>
               </VCardText>
             </VCard>
@@ -3056,10 +3166,7 @@ onMounted(() => {
     <VDialog v-model="isExportDialogOpen" max-width="900" scrollable>
       <VCard>
         <VCardTitle class="pa-6">
-          <div class="d-flex align-center">
-            <VIcon icon="ri-file-chart-line" class="me-2" color="success" />
-            Export Evaluation Report
-          </div>
+          Export Evaluation Report
         </VCardTitle>
 
         <VDivider />
@@ -3067,24 +3174,19 @@ onMounted(() => {
         <VCardText class="pa-6">
           <!-- Step 1: Select Instructor -->
           <div class="mb-6">
-            <p class="text-subtitle-1 font-weight-medium mb-3">Select Instructor to Export</p>
+            <p class="text-subtitle-2 mb-3">Select Instructor</p>
             <VSelect
               v-model="selectedInstructorForExport"
               :items="instructorsWithResponses"
               item-title="name"
               item-value="id"
-              label="Select Instructor"
+              label="Instructor"
               variant="outlined"
-              placeholder="Choose an instructor to generate report"
+              placeholder="Choose an instructor"
               @update:model-value="generateReport"
             >
               <template #item="{ item, props: itemProps }">
                 <VListItem v-bind="itemProps">
-                  <template #prepend>
-                    <VAvatar size="36" color="primary" variant="tonal">
-                      <VIcon icon="ri-user-line" size="18" />
-                    </VAvatar>
-                  </template>
                   <VListItemTitle>{{ item.raw.name }}</VListItemTitle>
                   <VListItemSubtitle>
                     {{ item.raw.classCount }} class(es) | {{ item.raw.responseCount }} responses
@@ -3105,34 +3207,22 @@ onMounted(() => {
             <VDivider class="mb-4" />
 
             <div class="report-preview">
-              <!-- Compact Header with Overall Rating -->
+              <!-- Report Header -->
               <VCard variant="outlined" class="mb-4">
                 <VCardText class="pa-4">
                   <div class="d-flex flex-wrap align-center justify-space-between gap-4">
                     <div>
-                      <p class="text-h6 font-weight-bold mb-1">{{ currentInstructorReport.instructorName }}</p>
-                      <div class="d-flex flex-wrap align-center gap-3 text-body-2 text-medium-emphasis">
-                        <span>{{ currentInstructorReport.academicTerm || 'N/A' }}</span>
-                        <VDivider vertical class="my-1" />
-                        <span>{{ currentInstructorReport.totalClasses }} class(es)</span>
-                        <VDivider vertical class="my-1" />
-                        <span>{{ currentInstructorReport.totalRespondents }}/{{ currentInstructorReport.totalStudents }} responses</span>
-                        <VDivider vertical class="my-1" />
-                        <span>{{ currentInstructorReport.responseRate }}% rate</span>
+                      <p class="text-h6 font-weight-medium mb-1">{{ currentInstructorReport.instructorName }}</p>
+                      <div class="text-body-2 text-medium-emphasis">
+                        {{ currentInstructorReport.academicTerm || 'N/A' }} |
+                        {{ currentInstructorReport.totalClasses }} class(es) |
+                        {{ currentInstructorReport.totalRespondents }}/{{ currentInstructorReport.totalStudents }} responses |
+                        {{ currentInstructorReport.responseRate }}% rate
                       </div>
                     </div>
-                    <div class="d-flex align-center gap-2">
-                      <div class="text-right">
-                        <p class="text-h4 font-weight-bold text-primary mb-0">{{ currentInstructorReport.overallAverage.toFixed(2) }}</p>
-                        <p class="text-caption text-medium-emphasis">Overall Rating</p>
-                      </div>
-                      <VChip
-                        :color="currentInstructorReport.overallAverage >= 4 ? 'success' : currentInstructorReport.overallAverage >= 3 ? 'warning' : 'error'"
-                        size="small"
-                        variant="tonal"
-                      >
-                        {{ getVerbalInterpretation(currentInstructorReport.overallAverage) }}
-                      </VChip>
+                    <div class="text-right">
+                      <p class="text-h4 font-weight-bold mb-0">{{ currentInstructorReport.overallAverage.toFixed(2) }}</p>
+                      <p class="text-caption text-medium-emphasis">Overall Rating ({{ getVerbalInterpretation(currentInstructorReport.overallAverage) }})</p>
                     </div>
                   </div>
                 </VCardText>
@@ -3148,7 +3238,6 @@ onMounted(() => {
                         <th>Section</th>
                         <th class="text-center">Responses</th>
                         <th class="text-center">Rate</th>
-                        <th class="text-center">Avg</th>
                         <th class="text-center">Rating</th>
                       </tr>
                     </thead>
@@ -3161,15 +3250,13 @@ onMounted(() => {
                         <td class="text-body-2">{{ classData.section }}</td>
                         <td class="text-center text-body-2">{{ classData.totalRespondents }}/{{ classData.totalStudents }}</td>
                         <td class="text-center text-body-2">{{ classData.responseRate }}%</td>
-                        <td class="text-center font-weight-bold">{{ classData.overallAverage.toFixed(2) }}</td>
                         <td class="text-center">
-                          <VChip
-                            :color="classData.overallAverage >= 4 ? 'success' : classData.overallAverage >= 3 ? 'warning' : 'error'"
-                            size="x-small"
-                            variant="tonal"
+                          <span
+                            class="font-weight-medium"
+                            :class="classData.overallAverage >= 4 ? 'text-success' : classData.overallAverage >= 3 ? 'text-warning' : 'text-error'"
                           >
-                            {{ getVerbalInterpretation(classData.overallAverage) }}
-                          </VChip>
+                            {{ classData.overallAverage.toFixed(2) }}
+                          </span>
                         </td>
                       </tr>
                     </tbody>
@@ -3181,9 +3268,9 @@ onMounted(() => {
 
           <!-- No Selection -->
           <div v-else class="text-center pa-8">
-            <VIcon icon="ri-file-chart-line" size="64" color="medium-emphasis" class="mb-4" />
-            <p class="text-body-1 text-medium-emphasis">
-              Select an instructor to preview and export the evaluation report
+            <VIcon icon="ri-file-text-line" size="48" color="medium-emphasis" class="mb-4" />
+            <p class="text-body-2 text-medium-emphasis">
+              Select an instructor to preview the report
             </p>
           </div>
         </VCardText>
@@ -3197,7 +3284,7 @@ onMounted(() => {
           </VBtn>
           <VBtn
             v-if="currentInstructorReport"
-            color="success"
+            color="primary"
             prepend-icon="ri-printer-line"
             @click="printReport"
           >
@@ -3211,10 +3298,7 @@ onMounted(() => {
     <VDialog v-model="isOfficeExportDialogOpen" max-width="900" scrollable>
       <VCard>
         <VCardTitle class="pa-6">
-          <div class="d-flex align-center">
-            <VIcon icon="ri-building-line" class="me-2" color="success" />
-            Office Evaluation Report
-          </div>
+          Office Evaluation Report
         </VCardTitle>
 
         <VDivider />
@@ -3222,8 +3306,8 @@ onMounted(() => {
         <VCardText class="pa-6">
           <!-- Loading -->
           <div v-if="!currentOfficeReport" class="text-center pa-8">
-            <VIcon icon="ri-file-chart-line" size="64" color="medium-emphasis" class="mb-4" />
-            <p class="text-body-1 text-medium-emphasis">
+            <VIcon icon="ri-file-text-line" size="48" color="medium-emphasis" class="mb-4" />
+            <p class="text-body-2 text-medium-emphasis">
               No report data available
             </p>
           </div>
@@ -3231,32 +3315,21 @@ onMounted(() => {
           <!-- Report Preview -->
           <template v-else>
             <div class="report-preview">
-              <!-- Compact Header with Overall Rating -->
+              <!-- Report Header -->
               <VCard variant="outlined" class="mb-4">
                 <VCardText class="pa-4">
                   <div class="d-flex flex-wrap align-center justify-space-between gap-4">
                     <div>
-                      <p class="text-h6 font-weight-bold mb-1">{{ currentOfficeReport.officeName }}</p>
-                      <div class="d-flex flex-wrap align-center gap-3 text-body-2 text-medium-emphasis">
-                        <span>{{ currentOfficeReport.academicTerm || 'N/A' }}</span>
-                        <VDivider vertical class="my-1" />
-                        <span>{{ currentOfficeReport.totalRespondents }}/{{ currentOfficeReport.totalExpected }} responses</span>
-                        <VDivider vertical class="my-1" />
-                        <span>{{ currentOfficeReport.responseRate }}% rate</span>
+                      <p class="text-h6 font-weight-medium mb-1">{{ currentOfficeReport.officeName }}</p>
+                      <div class="text-body-2 text-medium-emphasis">
+                        {{ currentOfficeReport.academicTerm || 'N/A' }} |
+                        {{ currentOfficeReport.totalRespondents }}/{{ currentOfficeReport.totalExpected }} responses |
+                        {{ currentOfficeReport.responseRate }}% rate
                       </div>
                     </div>
-                    <div class="d-flex align-center gap-2">
-                      <div class="text-right">
-                        <p class="text-h4 font-weight-bold text-primary mb-0">{{ currentOfficeReport.overallAverage.toFixed(2) }}</p>
-                        <p class="text-caption text-medium-emphasis">Overall Rating</p>
-                      </div>
-                      <VChip
-                        :color="currentOfficeReport.overallAverage >= 4 ? 'success' : currentOfficeReport.overallAverage >= 3 ? 'warning' : 'error'"
-                        size="small"
-                        variant="tonal"
-                      >
-                        {{ getVerbalInterpretation(currentOfficeReport.overallAverage) }}
-                      </VChip>
+                    <div class="text-right">
+                      <p class="text-h4 font-weight-bold mb-0">{{ currentOfficeReport.overallAverage.toFixed(2) }}</p>
+                      <p class="text-caption text-medium-emphasis">Overall Rating ({{ getVerbalInterpretation(currentOfficeReport.overallAverage) }})</p>
                     </div>
                   </div>
                 </VCardText>
@@ -3270,7 +3343,6 @@ onMounted(() => {
                       <tr>
                         <th>Group</th>
                         <th>Question</th>
-                        <th class="text-center">Avg</th>
                         <th class="text-center">Rating</th>
                       </tr>
                     </thead>
@@ -3279,15 +3351,13 @@ onMounted(() => {
                         <tr v-for="(q, qIdx) in group.questions" :key="`${group.groupTitle}-${qIdx}`">
                           <td class="text-body-2 text-medium-emphasis">{{ qIdx === 0 ? group.groupTitle : '' }}</td>
                           <td class="text-body-2">{{ q.questionText }}</td>
-                          <td class="text-center font-weight-bold">{{ q.average.toFixed(2) }}</td>
                           <td class="text-center">
-                            <VChip
-                              :color="q.average >= 4 ? 'success' : q.average >= 3 ? 'warning' : 'error'"
-                              size="x-small"
-                              variant="tonal"
+                            <span
+                              class="font-weight-medium"
+                              :class="q.average >= 4 ? 'text-success' : q.average >= 3 ? 'text-warning' : 'text-error'"
                             >
-                              {{ getVerbalInterpretation(q.average) }}
-                            </VChip>
+                              {{ q.average.toFixed(2) }}
+                            </span>
                           </td>
                         </tr>
                       </template>
@@ -3308,16 +3378,15 @@ onMounted(() => {
           </VBtn>
           <VBtn
             v-if="currentOfficeReport"
-            color="info"
-            prepend-icon="ri-file-excel-line"
+            color="primary"
+            variant="outlined"
             @click="exportOfficeReportAsCSV"
           >
-            Export as CSV
+            Export CSV
           </VBtn>
           <VBtn
             v-if="currentOfficeReport"
-            color="success"
-            prepend-icon="ri-printer-line"
+            color="primary"
             @click="printOfficeReport"
           >
             Print / Save as PDF

@@ -5,6 +5,7 @@ definePage({
   meta: {
     action: 'read',
     subject: 'StudentSurveys',
+    allowedRoles: ['student'],
   },
 })
 
@@ -38,6 +39,7 @@ interface StudentSurvey {
   evaluation_type?: 'Class' | 'Office'
   office_id?: SchoolOffice | number | null
   assignment_mode?: 'all' | 'department' | 'specific'
+  target_year_levels?: string[] | null
   students?: { students_id: number }[]
   classes?: any[]
   question_group?: StudentQuestionGroup[]
@@ -89,6 +91,7 @@ const pendingEvaluations = ref<PendingEvaluation[]>([])
 const completedResponses = ref<CompletedResponse[]>([])
 const studentClasses = ref<ClassInfo[]>([])
 const studentDepartmentId = ref<number | null>(null)
+const studentYearLevel = ref<number | null>(null)
 
 // Error/info state
 const hasError = ref(false)
@@ -162,19 +165,21 @@ const fetchStudentClasses = async () => {
       return
     }
 
-    // Fetch student's department
+    // Fetch student's department and year_level
     try {
       const studentRes = await $api(`/items/students/${sid}`, {
         params: {
-          fields: ['deparment_id'],
+          fields: ['deparment_id', 'year_level'],
         },
       })
       const deptId = studentRes.data?.deparment_id
       studentDepartmentId.value = typeof deptId === 'object' ? deptId?.id : deptId
+      studentYearLevel.value = studentRes.data?.year_level || null
     }
     catch (err) {
-      console.error('Failed to fetch student department:', err)
+      console.error('Failed to fetch student data:', err)
       studentDepartmentId.value = null
+      studentYearLevel.value = null
     }
 
     // student_id is a junction table (M2M): classes -> classes_students -> students
@@ -189,11 +194,10 @@ const fetchStudentClasses = async () => {
       },
     })
 
-    studentClasses.value = res.data || []
+    studentClasses.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch student classes:', error)
-    studentClasses.value = []
   }
 }
 
@@ -214,6 +218,7 @@ const fetchPendingEvaluations = async () => {
         filter: { is_active: { _eq: 'Active' } },
         fields: [
           '*',
+          'target_year_levels',
           // Office info
           'office_id.id',
           'office_id.name',
@@ -236,7 +241,7 @@ const fetchPendingEvaluations = async () => {
       },
     })
 
-    const allSurveys: StudentSurvey[] = res.data || []
+    const allSurveys: StudentSurvey[] = res.data
 
     // Get completed responses for this student (survey_id + class_id or office_id combinations)
     interface CompletedEvaluation {
@@ -266,6 +271,17 @@ const fetchPendingEvaluations = async () => {
     const evaluations: PendingEvaluation[] = []
 
     for (const survey of allSurveys) {
+      // Check year level targeting - skip if survey targets specific year levels and student doesn't match
+      const targetYearLevels = survey.target_year_levels
+      if (targetYearLevels && targetYearLevels.length > 0) {
+        // Survey targets specific year levels
+        if (!studentYearLevel.value || !targetYearLevels.includes(studentYearLevel.value)) {
+          // Student's year level doesn't match - skip this survey
+          continue
+        }
+      }
+      // If targetYearLevels is null/empty, survey applies to all year levels
+
       const evaluationType = (survey.evaluation_type || 'Class').toLowerCase() as 'class' | 'office'
 
       if (evaluationType === 'office') {
@@ -418,11 +434,11 @@ const fetchCompletedResponses = async () => {
       },
     })
 
-    completedResponses.value = (res.data || []).map((r: any) => {
+    completedResponses.value = (res.data).map((r: any) => {
       const classData = r.class_id
       const officeData = r.office_id
-      const courseCode = classData?.course_id?.courseCode || ''
-      const courseName = classData?.course_id?.courseName || ''
+      const courseCode = classData?.course_id?.courseCode
+      const courseName = classData?.course_id?.courseName
       const rawEvalType = r.survey_id?.evaluation_type || (officeData ? 'Office' : 'Class')
       const evalType = rawEvalType.toLowerCase() as 'class' | 'office'
 
@@ -436,9 +452,9 @@ const fetchCompletedResponses = async () => {
         officeName: officeData?.name,
         evaluationType: evalType,
         submitted_at: r.submitted_at,
-        questionsAnswered: r.answers?.length || 0,
-        studentName: studentData ? `${studentData.first_name || ''} ${studentData.last_name || ''}`.trim() : '',
-        studentNumber: studentData?.student_number || '',
+        questionsAnswered: r.answers?.length,
+        studentName: studentData ? `${studentData.first_name} ${studentData.last_name}`.trim() : '',
+        studentNumber: studentData?.student_number,
         program: typeof studentData?.deparment_id?.name === 'object' && studentData.deparment_id.name?.programName ? studentData.deparment_id.name.programName : '',
       }
     })
@@ -465,12 +481,12 @@ const openSurvey = (evaluation: PendingEvaluation) => {
 // ==================== HELPERS ====================
 
 const getTeacherName = (teacher?: Teacher): string => {
-  if (!teacher) return '-'
+  if (!teacher) return ''
   return `${teacher.first_name} ${teacher.last_name}`
 }
 
 const getClassName = (classInfo?: ClassInfo): string => {
-  if (!classInfo) return '-'
+  if (!classInfo) return ''
   const courseCode = typeof classInfo.course_id === 'object' && classInfo.course_id
     ? classInfo.course_id.courseCode
     : ''
@@ -485,11 +501,11 @@ const getEvaluationTarget = (evaluation: PendingEvaluation): string => {
 }
 
 const getQuestionCount = (survey: StudentSurvey): number => {
-  return (survey.question_group || []).reduce((acc, g) => acc + (g.questions?.length || 0), 0)
+  return (survey.question_group || []).reduce((acc, g) => acc + (g.questions?.length ?? 0), 0)
 }
 
 const formatDate = (dateStr: string): string => {
-  if (!dateStr) return '-'
+  if (!dateStr) return ''
   try {
     return new Date(dateStr).toLocaleDateString('en-US', {
       year: 'numeric',
@@ -691,7 +707,7 @@ onMounted(() => {
                       {{ response.evaluationType === 'office' ? 'Office' : 'Class' }}
                     </VChip>
                   </td>
-                  <td>{{ response.evaluationType === 'office' ? response.officeName : response.className || '-' }}</td>
+                  <td>{{ response.evaluationType === 'office' ? response.officeName : response.className }}</td>
                   <td>{{ formatDate(response.submitted_at) }}</td>
                   <td class="text-center">
                     <VBtn

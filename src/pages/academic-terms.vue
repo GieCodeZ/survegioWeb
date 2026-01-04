@@ -5,6 +5,7 @@ definePage({
   meta: {
     action: 'read',
     subject: 'academicTerms',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -25,20 +26,26 @@ const isDeleteDialogOpen = ref(false)
 const isEditing = ref(false)
 const selectedTerm = ref<AcademicTerm | null>(null)
 
+// Deletion prevention state
+const isCheckingDeletion = ref(false)
+const deletionBlockedReason = ref<string | null>(null)
+const relatedClasses = ref<any[]>([])
+const relatedSurveys = ref<any[]>([])
+
 const form = ref<AcademicTerm>({
   schoolYear: '',
   startDate: '',
   endDate: '',
-  semester: 'First Semester',
-  status: 'Draft',
+  semester: '',
+  status: '',
 })
 
 const search = ref('')
 const statusFilter = ref<string | null>(null)
 
-// Options
-const semesterOptions = ['First Semester', 'Second Semester']
-const statusOptions = ['Draft', 'Active', 'Archived']
+// Options - to be fetched from backend
+const semesterOptions = ref<string[]>([])
+const statusOptions = ref<string[]>([])
 
 // Filtered academic terms based on status
 const filteredAcademicTerms = computed(() => {
@@ -61,7 +68,7 @@ const headers = [
 // Format date for display
 const formatDate = (dateString: string | null | undefined) => {
   if (!dateString)
-    return '-'
+    return ''
 
   return new Date(dateString).toLocaleDateString('en-US', {
     year: 'numeric',
@@ -80,7 +87,7 @@ const getStatusColor = (status: string) => {
     case 'Draft':
       return 'warning'
     default:
-      return 'default'
+      return ''
   }
 }
 
@@ -94,7 +101,7 @@ const fetchAcademicTerms = async () => {
       },
     })
 
-    academicTerms.value = res.data || []
+    academicTerms.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch academic terms:', error)
@@ -111,8 +118,8 @@ const openCreateDialog = () => {
     schoolYear: '',
     startDate: '',
     endDate: '',
-    semester: 'First Semester',
-    status: 'Draft',
+    semester: '',
+    status: '',
   }
   isDialogOpen.value = true
 }
@@ -125,9 +132,71 @@ const openEditDialog = (term: AcademicTerm) => {
 }
 
 // Open delete confirmation dialog
-const openDeleteDialog = (term: AcademicTerm) => {
+const openDeleteDialog = async (term: AcademicTerm) => {
   selectedTerm.value = term
   isDeleteDialogOpen.value = true
+  await checkTermDeletion(term)
+}
+
+// Check if academic term can be deleted
+const checkTermDeletion = async (term: AcademicTerm) => {
+  if (!term.id) return
+
+  isCheckingDeletion.value = true
+  deletionBlockedReason.value = null
+  relatedClasses.value = []
+  relatedSurveys.value = []
+
+  try {
+    // Check for classes using this academic term
+    const classesRes = await $api('/items/classes', {
+      params: {
+        filter: { acadTerm_id: { _eq: term.id } },
+        fields: ['id', 'section', 'course_id.courseCode', 'teacher_id.first_name', 'teacher_id.last_name'],
+        limit: 10,
+      },
+    })
+
+    if (classesRes.data && classesRes.data.length > 0) {
+      relatedClasses.value = classesRes.data
+      deletionBlockedReason.value = 'classes'
+      isCheckingDeletion.value = false
+      return
+    }
+
+    // Check for surveys using this academic term
+    const deanSurveysRes = await $api('/items/DeanEvaluationSurvey', {
+      params: {
+        filter: { academic_term_id: { _eq: term.id } },
+        fields: ['id', 'title', 'survey_type'],
+        limit: 10,
+      },
+    })
+
+    const studentSurveysRes = await $api('/items/StudentEvaluationSurvey', {
+      params: {
+        filter: { academic_term_id: { _eq: term.id } },
+        fields: ['id', 'title', 'survey_type'],
+        limit: 10,
+      },
+    })
+
+    const allSurveys = [
+      ...(deanSurveysRes.data || []).map((s: any) => ({ ...s, type: 'Dean' })),
+      ...(studentSurveysRes.data || []).map((s: any) => ({ ...s, type: 'Student' })),
+    ]
+
+    if (allSurveys.length > 0) {
+      relatedSurveys.value = allSurveys
+      deletionBlockedReason.value = 'surveys'
+    }
+  }
+  catch (error) {
+    console.error('Failed to check term deletion:', error)
+  }
+  finally {
+    isCheckingDeletion.value = false
+  }
 }
 
 // Check if this is the only active term
@@ -151,7 +220,7 @@ const availableStatusOptions = computed(() => {
     return ['Active']
   }
 
-  return statusOptions
+  return statusOptions.value
 })
 
 // Save term (create or update)
@@ -219,9 +288,11 @@ const deleteTerm = async () => {
 
   // Validation: Can't delete the only active term
   if (isSelectedOnlyActiveTerm.value) {
-    alert('Cannot delete. There must always be at least one active academic term.')
-    isDeleteDialogOpen.value = false
+    return
+  }
 
+  // Don't allow deletion if term has dependencies
+  if (deletionBlockedReason.value) {
     return
   }
 
@@ -232,6 +303,9 @@ const deleteTerm = async () => {
 
     isDeleteDialogOpen.value = false
     selectedTerm.value = null
+    deletionBlockedReason.value = null
+    relatedClasses.value = []
+    relatedSurveys.value = []
     await fetchAcademicTerms()
   }
   catch (error) {
@@ -239,9 +313,35 @@ const deleteTerm = async () => {
   }
 }
 
+// Fetch semester options from Directus field metadata
+const fetchSemesterOptions = async () => {
+  try {
+    const res = await $api('/fields/academicTerms/semester')
+    const choices = res.data?.meta?.options?.choices || []
+    semesterOptions.value = choices.map((choice: { text: string; value: string }) => choice.value)
+  }
+  catch (error) {
+    console.error('Failed to fetch semester options:', error)
+  }
+}
+
+// Fetch status options from Directus field metadata
+const fetchStatusOptions = async () => {
+  try {
+    const res = await $api('/fields/academicTerms/status')
+    const choices = res.data?.meta?.options?.choices || []
+    statusOptions.value = choices.map((choice: { text: string; value: string }) => choice.value)
+  }
+  catch (error) {
+    console.error('Failed to fetch status options:', error)
+  }
+}
+
 // Fetch terms on mount
 onMounted(() => {
   fetchAcademicTerms()
+  fetchSemesterOptions()
+  fetchStatusOptions()
 })
 </script>
 
@@ -422,28 +522,112 @@ onMounted(() => {
     <!-- Delete Confirmation Dialog -->
     <VDialog
       v-model="isDeleteDialogOpen"
-      max-width="400"
+      max-width="500"
     >
       <VCard>
-        <VCardTitle class="pa-6">
+        <VCardTitle class="pa-6 d-flex align-center gap-2">
+          <VIcon icon="ri-error-warning-line" color="error" />
           Delete Academic Term
         </VCardTitle>
 
         <VDivider />
 
         <VCardText class="pa-6">
-          <template v-if="isSelectedOnlyActiveTerm">
-            <VAlert
-              type="error"
-              variant="tonal"
-              class="mb-4"
-            >
-              Cannot delete the only active academic term. There must always be at least one active term.
-            </VAlert>
-          </template>
+          <!-- Loading state -->
+          <div v-if="isCheckingDeletion" class="d-flex justify-center pa-4">
+            <VProgressCircular indeterminate color="primary" />
+          </div>
+
           <template v-else>
-            Are you sure you want to delete <strong>{{ selectedTerm?.schoolYear }} - {{ selectedTerm?.semester }}</strong>?
-            This action cannot be undone.
+            <!-- Blocked: Only active term -->
+            <template v-if="isSelectedOnlyActiveTerm">
+              <VAlert
+                type="error"
+                variant="tonal"
+                class="mb-4"
+              >
+                <template #title>
+                  Cannot Delete Academic Term
+                </template>
+                This is the only active academic term. There must always be at least one active term.
+              </VAlert>
+            </template>
+
+            <!-- Blocked: Has classes -->
+            <template v-else-if="deletionBlockedReason === 'classes'">
+              <VAlert
+                type="error"
+                variant="tonal"
+                class="mb-4"
+              >
+                <template #title>
+                  Cannot Delete Academic Term
+                </template>
+                This academic term has {{ relatedClasses.length }}+ class(es) assigned. Please delete or reassign the classes first.
+              </VAlert>
+
+              <p class="text-subtitle-2 mb-2">Classes in this term (showing first 10):</p>
+              <VList density="compact" class="mb-4">
+                <VListItem
+                  v-for="cls in relatedClasses"
+                  :key="cls.id"
+                  density="compact"
+                >
+                  <template #prepend>
+                    <VIcon icon="ri-book-line" size="small" />
+                  </template>
+                  <VListItemTitle>
+                    {{ cls.course_id?.courseCode || 'Unknown Course' }} - Section {{ cls.section }}
+                  </VListItemTitle>
+                  <VListItemSubtitle v-if="cls.teacher_id">
+                    {{ cls.teacher_id.first_name }} {{ cls.teacher_id.last_name }}
+                  </VListItemSubtitle>
+                </VListItem>
+              </VList>
+            </template>
+
+            <!-- Blocked: Has surveys -->
+            <template v-else-if="deletionBlockedReason === 'surveys'">
+              <VAlert
+                type="error"
+                variant="tonal"
+                class="mb-4"
+              >
+                <template #title>
+                  Cannot Delete Academic Term
+                </template>
+                This academic term has {{ relatedSurveys.length }}+ survey(s) associated. Please delete the surveys first.
+              </VAlert>
+
+              <p class="text-subtitle-2 mb-2">Surveys in this term:</p>
+              <VList density="compact" class="mb-4">
+                <VListItem
+                  v-for="survey in relatedSurveys"
+                  :key="survey.id"
+                  density="compact"
+                >
+                  <template #prepend>
+                    <VIcon icon="ri-survey-line" size="small" />
+                  </template>
+                  <VListItemTitle>
+                    {{ survey.title }}
+                  </VListItemTitle>
+                  <VListItemSubtitle>
+                    {{ survey.type }} Evaluation - {{ survey.survey_type }}
+                  </VListItemSubtitle>
+                </VListItem>
+              </VList>
+            </template>
+
+            <!-- Can delete -->
+            <template v-else>
+              <p class="mb-4">
+                Are you sure you want to delete <strong>{{ selectedTerm?.schoolYear }} - {{ selectedTerm?.semester }}</strong>?
+              </p>
+              <p class="text-error font-weight-medium mb-0">
+                This action cannot be undone.
+              </p>
+            </template>
           </template>
         </VCardText>
 
@@ -455,10 +639,10 @@ onMounted(() => {
             variant="outlined"
             @click="isDeleteDialogOpen = false"
           >
-            {{ isSelectedOnlyActiveTerm ? 'Close' : 'Cancel' }}
+            {{ (isSelectedOnlyActiveTerm || deletionBlockedReason) ? 'Close' : 'Cancel' }}
           </VBtn>
           <VBtn
-            v-if="!isSelectedOnlyActiveTerm"
+            v-if="!isSelectedOnlyActiveTerm && !deletionBlockedReason && !isCheckingDeletion"
             color="error"
             @click="deleteTerm"
           >

@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { $api } from '@/utils/api'
+import { SURVEY_STATUS_OPTIONS } from '@/utils/constants'
 
 definePage({
   meta: {
     action: 'read',
     subject: 'surveys',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -76,17 +78,13 @@ const form = ref<DeanSurveyForm>({
   instruction: '',
   survey_start: '',
   survey_end: '',
-  is_active: 'Draft',
+  is_active: '' as 'Active' | 'Draft' | 'Archived',
   academic_term_id: null,
 })
 
 // ==================== OPTIONS ====================
 
-const statusOptions = [
-  { title: 'Draft', value: 'Draft' },
-  { title: 'Active', value: 'Active' },
-  { title: 'Archived', value: 'Archived' },
-]
+const statusOptions = SURVEY_STATUS_OPTIONS
 
 // ==================== COMPUTED ====================
 
@@ -124,22 +122,22 @@ const getStatusColor = (status: string) => {
     case 'Active': return 'success'
     case 'Draft': return 'warning'
     case 'Archived': return 'secondary'
-    default: return 'default'
+    default: return ''
   }
 }
 
 const getAcademicTermDisplay = (survey: DeanSurvey): string => {
-  if (!survey.academic_term_id) return '-'
+  if (!survey.academic_term_id) return ''
   if (typeof survey.academic_term_id === 'object' && survey.academic_term_id !== null) {
     const term = survey.academic_term_id
     if (term.semester && term.schoolYear)
-      return `${term.semester} - ${term.schoolYear}`
+      return `${term.schoolYear} - ${term.semester}`
     return `Term #${term.id}`
   }
   const term = academicTerms.value.find((t: AcademicTerm) => t.id === survey.academic_term_id)
   if (term)
-    return `${term.semester} - ${term.schoolYear}`
-  return '-'
+    return `${term.schoolYear} - ${term.semester}`
+  return ''
 }
 
 const getQuestionsCount = (survey: DeanSurvey): number => {
@@ -152,8 +150,8 @@ const getQuestionsCount = (survey: DeanSurvey): number => {
 }
 
 const getProgress = (survey: DeanSurvey): number => {
-  const total = survey._totalExpected ?? 0
-  const responseCount = survey._responseCount ?? 0
+  const total = survey._totalExpected
+  const responseCount = survey._responseCount
 
   if (total === 0) return 0
   return Math.round((responseCount / total) * 100)
@@ -212,7 +210,7 @@ const endDateValue = computed({
 
 const startTimeValue = computed({
   get: () => {
-    if (!form.value.survey_start) return '00:00'
+    if (!form.value.survey_start) return ''
     const date = new Date(form.value.survey_start)
     return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
   },
@@ -230,7 +228,7 @@ const startTimeValue = computed({
 
 const endTimeValue = computed({
   get: () => {
-    if (!form.value.survey_end) return '23:59'
+    if (!form.value.survey_end) return ''
     const date = new Date(form.value.survey_end)
     return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
   },
@@ -256,7 +254,7 @@ const fetchAcademicTerms = async () => {
         sort: '-schoolYear',
       },
     })
-    academicTerms.value = res.data || []
+    academicTerms.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch academic terms:', error)
@@ -275,10 +273,10 @@ const fetchSurveys = async () => {
           aggregate: { count: '*' },
         },
       })
-      activeDeanCount = Number(deansRes.data?.[0]?.count) || 0
+      activeDeanCount = Number(deansRes.data?.[0]?.count)
     }
     catch {
-      activeDeanCount = 0
+      // Failed to get dean count
     }
 
     const res = await $api('/items/DeanEvaluationSurvey', {
@@ -294,7 +292,7 @@ const fetchSurveys = async () => {
       },
     })
 
-    const surveys: DeanSurvey[] = res.data || []
+    const surveys: DeanSurvey[] = res.data
 
     for (const survey of surveys) {
       if (survey.id) {
@@ -306,14 +304,14 @@ const fetchSurveys = async () => {
               aggregate: { count: '*' },
             },
           })
-          survey._responseCount = Number(responseRes.data?.[0]?.count) || 0
+          survey._responseCount = Number(responseRes.data?.[0]?.count)
         }
         catch {
-          survey._responseCount = 0
+          // Failed to get response count
         }
 
         // Calculate expected responses: deans × teachers_to_evaluate
-        const teachersCount = (survey as any).teachers_to_evaluate?.length || 0
+        const teachersCount = (survey as any).teachers_to_evaluate?.length
         survey._totalExpected = activeDeanCount * teachersCount
       }
     }
@@ -322,7 +320,6 @@ const fetchSurveys = async () => {
   }
   catch (error) {
     console.error('Failed to fetch dean surveys:', error)
-    deanSurveys.value = []
   }
   finally {
     isLoading.value = false
@@ -337,7 +334,7 @@ const openCreateDialog = () => {
     instruction: '',
     survey_start: '',
     survey_end: '',
-    is_active: 'Draft',
+    is_active: '' as 'Active' | 'Draft' | 'Archived',
     academic_term_id: null,
   }
   isCreateDialogOpen.value = true
@@ -398,6 +395,24 @@ const deleteSurvey = async () => {
   if (!selectedSurvey.value?.id) return
 
   try {
+    // First, delete all responses associated with this survey
+    const responsesRes = await $api('/items/DeanSurveyResponses', {
+      params: {
+        filter: { survey_id: { _eq: selectedSurvey.value.id } },
+        fields: ['id'],
+      },
+    })
+
+    if (responsesRes.data?.length > 0) {
+      // Delete each response
+      await Promise.all(
+        responsesRes.data.map((response: { id: number }) =>
+          $api(`/items/DeanSurveyResponses/${response.id}`, { method: 'DELETE' }),
+        ),
+      )
+    }
+
+    // Then delete the survey
     await $api(`/items/DeanEvaluationSurvey/${selectedSurvey.value.id}`, {
       method: 'DELETE',
     })
@@ -501,7 +516,7 @@ onMounted(() => {
             />
             <div class="text-caption text-no-wrap">
               {{ getProgress(item) }}%
-              <span class="text-medium-emphasis">({{ item._responseCount || 0 }}/{{ item._totalExpected || 0 }})</span>
+              <span class="text-medium-emphasis">({{ item._responseCount }}/{{ item._totalExpected }})</span>
             </div>
           </div>
         </template>
@@ -528,13 +543,21 @@ onMounted(() => {
     </VCard>
 
     <!-- Delete Survey Dialog -->
-    <VDialog v-model="isDeleteDialogOpen" max-width="400">
+    <VDialog v-model="isDeleteDialogOpen" max-width="450">
       <VCard>
         <VCardTitle class="pa-6">Delete Evaluation</VCardTitle>
         <VDivider />
         <VCardText class="pa-6">
-          Are you sure you want to delete <strong>{{ selectedSurvey?.title }}</strong>?
-          This action cannot be undone.
+          <p class="mb-4">
+            Are you sure you want to delete <strong>{{ selectedSurvey?.title }}</strong>?
+          </p>
+          <VAlert
+            type="warning"
+            variant="tonal"
+            class="mb-0"
+          >
+            <strong>Warning:</strong> All responses and data associated with this evaluation will be permanently deleted. This action cannot be undone.
+          </VAlert>
         </VCardText>
         <VDivider />
         <VCardActions class="pa-4">
@@ -577,11 +600,11 @@ onMounted(() => {
               />
             </VCol>
 
-            <VCol cols="12" md="6">
+            <VCol cols="12">
               <VSelect
                 v-model="form.academic_term_id"
                 :items="academicTerms"
-                :item-title="(item) => `${item.semester} - ${item.schoolYear}`"
+                :item-title="(item) => `${item.schoolYear} - ${item.semester}`"
                 item-value="id"
                 label="Academic Term"
                 variant="outlined"

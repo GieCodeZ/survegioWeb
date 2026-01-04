@@ -5,6 +5,7 @@ definePage({
   meta: {
     action: 'read',
     subject: 'programs',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -21,6 +22,12 @@ const isDialogOpen = ref(false)
 const isDeleteDialogOpen = ref(false)
 const isEditing = ref(false)
 const selectedProgram = ref<Program | null>(null)
+
+// Deletion prevention state
+const isCheckingDeletion = ref(false)
+const deletionBlockedReason = ref<string | null>(null)
+const relatedDepartments = ref<any[]>([])
+const relatedClassSections = ref<any[]>([])
 
 const form = ref<Program>({
   programCode: '',
@@ -67,9 +74,56 @@ const openEditDialog = (program: Program) => {
 }
 
 // Open delete confirmation dialog
-const openDeleteDialog = (program: Program) => {
+const openDeleteDialog = async (program: Program) => {
   selectedProgram.value = program
   isDeleteDialogOpen.value = true
+  await checkProgramDeletion(program)
+}
+
+// Check if program can be deleted
+const checkProgramDeletion = async (program: Program) => {
+  if (!program.id) return
+
+  isCheckingDeletion.value = true
+  deletionBlockedReason.value = null
+  relatedDepartments.value = []
+  relatedClassSections.value = []
+
+  try {
+    // Check for departments using this program
+    const deptRes = await $api('/items/Department', {
+      params: {
+        filter: { name: { _eq: program.id } },
+        fields: ['id', 'name.programName', 'name.programCode'],
+      },
+    })
+
+    if (deptRes.data && deptRes.data.length > 0) {
+      relatedDepartments.value = deptRes.data
+      deletionBlockedReason.value = 'departments'
+      isCheckingDeletion.value = false
+      return
+    }
+
+    // Check for class sections using this program
+    const classSectionRes = await $api('/items/ClassSection', {
+      params: {
+        filter: { program_id: { _eq: program.id } },
+        fields: ['id', 'section'],
+      },
+    })
+
+    if (classSectionRes.data && classSectionRes.data.length > 0) {
+      relatedClassSections.value = classSectionRes.data
+      deletionBlockedReason.value = 'classSections'
+    }
+  }
+  catch (error) {
+    console.error('Failed to check program deletion:', error)
+  }
+  finally {
+    isCheckingDeletion.value = false
+  }
 }
 
 // Save program (create or update)
@@ -109,6 +163,11 @@ const deleteProgram = async () => {
   if (!selectedProgram.value?.id)
     return
 
+  // Don't allow deletion if program has dependencies
+  if (deletionBlockedReason.value) {
+    return
+  }
+
   try {
     await $api(`/items/programs/${selectedProgram.value.id}`, {
       method: 'DELETE',
@@ -116,6 +175,9 @@ const deleteProgram = async () => {
 
     isDeleteDialogOpen.value = false
     selectedProgram.value = null
+    deletionBlockedReason.value = null
+    relatedDepartments.value = []
+    relatedClassSections.value = []
     await fetchPrograms()
   }
   catch (error) {
@@ -249,18 +311,93 @@ onMounted(() => {
     <!-- Delete Confirmation Dialog -->
     <VDialog
       v-model="isDeleteDialogOpen"
-      max-width="400"
+      max-width="500"
     >
       <VCard>
-        <VCardTitle class="pa-6">
+        <VCardTitle class="pa-6 d-flex align-center gap-2">
+          <VIcon icon="ri-error-warning-line" color="error" />
           Delete Program
         </VCardTitle>
 
         <VDivider />
 
         <VCardText class="pa-6">
-          Are you sure you want to delete <strong>{{ selectedProgram?.programName }}</strong>?
-          This action cannot be undone.
+          <!-- Loading state -->
+          <div v-if="isCheckingDeletion" class="d-flex justify-center pa-4">
+            <VProgressCircular indeterminate color="primary" />
+          </div>
+
+          <template v-else>
+            <!-- Blocked: Has departments -->
+            <template v-if="deletionBlockedReason === 'departments'">
+              <VAlert
+                type="error"
+                variant="tonal"
+                class="mb-4"
+              >
+                <template #title>
+                  Cannot Delete Program
+                </template>
+                This program has {{ relatedDepartments.length }} department(s) associated with it. Please delete the departments first.
+              </VAlert>
+
+              <p class="text-subtitle-2 mb-2">Related Departments:</p>
+              <VList density="compact" class="mb-4">
+                <VListItem
+                  v-for="dept in relatedDepartments"
+                  :key="dept.id"
+                  density="compact"
+                >
+                  <template #prepend>
+                    <VIcon icon="ri-building-line" size="small" />
+                  </template>
+                  <VListItemTitle>
+                    {{ dept.name?.programName || dept.name?.programCode || 'Department' }}
+                  </VListItemTitle>
+                </VListItem>
+              </VList>
+            </template>
+
+            <!-- Blocked: Has class sections -->
+            <template v-else-if="deletionBlockedReason === 'classSections'">
+              <VAlert
+                type="error"
+                variant="tonal"
+                class="mb-4"
+              >
+                <template #title>
+                  Cannot Delete Program
+                </template>
+                This program has {{ relatedClassSections.length }} class section configuration(s). Please delete them first.
+              </VAlert>
+
+              <p class="text-subtitle-2 mb-2">Related Class Sections:</p>
+              <VList density="compact" class="mb-4">
+                <VListItem
+                  v-for="cs in relatedClassSections"
+                  :key="cs.id"
+                  density="compact"
+                >
+                  <template #prepend>
+                    <VIcon icon="ri-group-line" size="small" />
+                  </template>
+                  <VListItemTitle>
+                    Sections: {{ cs.section?.join(', ') || 'N/A' }}
+                  </VListItemTitle>
+                </VListItem>
+              </VList>
+            </template>
+
+            <!-- Can delete -->
+            <template v-else>
+              <p class="mb-4">
+                Are you sure you want to delete <strong>{{ selectedProgram?.programName }}</strong>?
+              </p>
+              <p class="text-error font-weight-medium mb-0">
+                This action cannot be undone.
+              </p>
+            </template>
+          </template>
         </VCardText>
 
         <VDivider />
@@ -271,9 +408,10 @@ onMounted(() => {
             variant="outlined"
             @click="isDeleteDialogOpen = false"
           >
-            Cancel
+            {{ deletionBlockedReason ? 'Close' : 'Cancel' }}
           </VBtn>
           <VBtn
+            v-if="!deletionBlockedReason && !isCheckingDeletion"
             color="error"
             @click="deleteProgram"
           >

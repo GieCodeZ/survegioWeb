@@ -5,6 +5,7 @@ definePage({
   meta: {
     action: 'read',
     subject: 'departments',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -46,6 +47,12 @@ const isDeleteDialogOpen = ref(false)
 const isEditing = ref(false)
 const selectedDepartment = ref<Department | null>(null)
 
+// Deletion prevention state
+const isCheckingDeletion = ref(false)
+const deletionBlockedReason = ref<string | null>(null)
+const relatedClasses = ref<any[]>([])
+const relatedStudents = ref<any[]>([])
+
 const form = ref({
   id: undefined as number | undefined,
   name: null as number | null,
@@ -69,14 +76,14 @@ const headers = [
 // Get department name from relationship
 const getDepartmentName = (department: Department | null) => {
   if (!department)
-    return '-'
+    return ''
 
   if (typeof department.name === 'object' && department.name !== null)
-    return department.name.programName || department.name.programCode || '-'
+    return department.name.programName || department.name.programCode || ''
 
   const program = programs.value.find(p => p.id === department.name)
 
-  return program?.programName || '-'
+  return program?.programName
 }
 
 // Get teachers list - handles various Directus response structures
@@ -187,7 +194,7 @@ const fetchDepartments = async () => {
       },
     })
 
-    departments.value = res.data || []
+    departments.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch departments:', error)
@@ -207,7 +214,7 @@ const fetchPrograms = async () => {
       },
     })
 
-    programs.value = res.data || []
+    programs.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch programs:', error)
@@ -224,7 +231,7 @@ const fetchTeachers = async () => {
       },
     })
 
-    teachers.value = res.data || []
+    teachers.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch teachers:', error)
@@ -240,7 +247,7 @@ const fetchClasses = async () => {
       },
     })
 
-    classes.value = res.data || []
+    classes.value = res.data
   }
   catch (error) {
     console.error('Failed to fetch classes:', error)
@@ -299,9 +306,61 @@ const openEditDialog = (department: Department) => {
 }
 
 // Open delete confirmation dialog
-const openDeleteDialog = (department: Department) => {
+const openDeleteDialog = async (department: Department) => {
   selectedDepartment.value = department
   isDeleteDialogOpen.value = true
+  await checkDepartmentDeletion(department)
+}
+
+// Check if department can be deleted
+const checkDepartmentDeletion = async (department: Department) => {
+  if (!department.id) return
+
+  isCheckingDeletion.value = true
+  deletionBlockedReason.value = null
+  relatedClasses.value = []
+  relatedStudents.value = []
+
+  try {
+    // Check for classes using this department (via M2M)
+    const classesRes = await $api('/items/classes', {
+      params: {
+        filter: {
+          department_id: {
+            Department_id: { _eq: department.id },
+          },
+        },
+        fields: ['id', 'section', 'course_id.courseCode', 'acadTerm_id.schoolYear', 'acadTerm_id.semester'],
+      },
+    })
+
+    if (classesRes.data && classesRes.data.length > 0) {
+      relatedClasses.value = classesRes.data
+      deletionBlockedReason.value = 'classes'
+      isCheckingDeletion.value = false
+      return
+    }
+
+    // Check for students using this department
+    const studentsRes = await $api('/items/students', {
+      params: {
+        filter: { deparment_id: { _eq: department.id } },
+        fields: ['id', 'first_name', 'last_name', 'student_number'],
+        limit: 10,
+      },
+    })
+
+    if (studentsRes.data && studentsRes.data.length > 0) {
+      relatedStudents.value = studentsRes.data
+      deletionBlockedReason.value = 'students'
+    }
+  }
+  catch (error) {
+    console.error('Failed to check department deletion:', error)
+  }
+  finally {
+    isCheckingDeletion.value = false
+  }
 }
 
 // Save department (create or update)
@@ -345,6 +404,11 @@ const deleteDepartment = async () => {
   if (!selectedDepartment.value?.id)
     return
 
+  // Don't allow deletion if department has dependencies
+  if (deletionBlockedReason.value) {
+    return
+  }
+
   try {
     await $api(`/items/Department/${selectedDepartment.value.id}`, {
       method: 'DELETE',
@@ -352,6 +416,9 @@ const deleteDepartment = async () => {
 
     isDeleteDialogOpen.value = false
     selectedDepartment.value = null
+    deletionBlockedReason.value = null
+    relatedClasses.value = []
+    relatedStudents.value = []
     await fetchDepartments()
   }
   catch (error) {
@@ -559,18 +626,108 @@ onMounted(() => {
     <!-- Delete Confirmation Dialog -->
     <VDialog
       v-model="isDeleteDialogOpen"
-      max-width="400"
+      max-width="500"
     >
       <VCard>
-        <VCardTitle class="pa-6">
+        <VCardTitle class="pa-6 d-flex align-center gap-2">
+          <VIcon icon="ri-error-warning-line" color="error" />
           Delete Department
         </VCardTitle>
 
         <VDivider />
 
         <VCardText class="pa-6">
-          Are you sure you want to delete <strong>{{ getDepartmentName(selectedDepartment!) }}</strong>?
-          This action cannot be undone.
+          <!-- Loading state -->
+          <div v-if="isCheckingDeletion" class="d-flex justify-center pa-4">
+            <VProgressCircular indeterminate color="primary" />
+          </div>
+
+          <template v-else>
+            <!-- Blocked: Has classes -->
+            <template v-if="deletionBlockedReason === 'classes'">
+              <VAlert
+                type="error"
+                variant="tonal"
+                class="mb-4"
+              >
+                <template #title>
+                  Cannot Delete Department
+                </template>
+                This department has {{ relatedClasses.length }} class(es) assigned. Please remove or reassign the classes first.
+              </VAlert>
+
+              <p class="text-subtitle-2 mb-2">Related Classes:</p>
+              <VList density="compact" class="mb-4">
+                <VListItem
+                  v-for="cls in relatedClasses"
+                  :key="cls.id"
+                  density="compact"
+                >
+                  <template #prepend>
+                    <VIcon icon="ri-book-line" size="small" />
+                  </template>
+                  <VListItemTitle>
+                    {{ cls.course_id?.courseCode || 'Unknown Course' }} - Section {{ cls.section }}
+                  </VListItemTitle>
+                  <VListItemSubtitle>
+                    {{ cls.acadTerm_id?.schoolYear }} {{ cls.acadTerm_id?.semester }}
+                  </VListItemSubtitle>
+                </VListItem>
+              </VList>
+            </template>
+
+            <!-- Blocked: Has students -->
+            <template v-else-if="deletionBlockedReason === 'students'">
+              <VAlert
+                type="error"
+                variant="tonal"
+                class="mb-4"
+              >
+                <template #title>
+                  Cannot Delete Department
+                </template>
+                This department has {{ relatedStudents.length }}+ student(s) enrolled. Please reassign students to another department first.
+              </VAlert>
+
+              <p class="text-subtitle-2 mb-2">Students in this department (showing first 10):</p>
+              <VList density="compact" class="mb-4">
+                <VListItem
+                  v-for="student in relatedStudents"
+                  :key="student.id"
+                  density="compact"
+                >
+                  <template #prepend>
+                    <VIcon icon="ri-user-line" size="small" />
+                  </template>
+                  <VListItemTitle>
+                    {{ student.last_name }}, {{ student.first_name }}
+                  </VListItemTitle>
+                  <VListItemSubtitle>
+                    {{ student.student_number }}
+                  </VListItemSubtitle>
+                </VListItem>
+              </VList>
+            </template>
+
+            <!-- Can delete -->
+            <template v-else>
+              <p class="mb-4">
+                Are you sure you want to delete <strong>{{ selectedDepartment ? getDepartmentName(selectedDepartment) : '' }}</strong>?
+              </p>
+
+              <VAlert
+                type="info"
+                variant="tonal"
+                class="mb-3"
+              >
+                Teacher assignments to this department will be removed automatically.
+              </VAlert>
+
+              <p class="text-error font-weight-medium mb-0">
+                This action cannot be undone.
+              </p>
+            </template>
+          </template>
         </VCardText>
 
         <VDivider />
@@ -581,9 +738,10 @@ onMounted(() => {
             variant="outlined"
             @click="isDeleteDialogOpen = false"
           >
-            Cancel
+            {{ deletionBlockedReason ? 'Close' : 'Cancel' }}
           </VBtn>
           <VBtn
+            v-if="!deletionBlockedReason && !isCheckingDeletion"
             color="error"
             @click="deleteDepartment"
           >

@@ -5,6 +5,7 @@ definePage({
   meta: {
     action: 'read',
     subject: 'school-offices',
+    allowedRoles: ['administrator'],
   },
 })
 
@@ -24,6 +25,11 @@ const isEditing = ref(false)
 const isSaving = ref(false)
 const selectedOffice = ref<SchoolOffice | null>(null)
 const search = ref('')
+
+// Deletion prevention state
+const isCheckingDeletion = ref(false)
+const deletionBlockedReason = ref<string | null>(null)
+const relatedSurveys = ref<any[]>([])
 
 const form = ref<SchoolOffice>({
   name: '',
@@ -81,9 +87,41 @@ const openEditDialog = (office: SchoolOffice) => {
 }
 
 // Open delete confirmation dialog
-const openDeleteDialog = (office: SchoolOffice) => {
+const openDeleteDialog = async (office: SchoolOffice) => {
   selectedOffice.value = office
   isDeleteDialogOpen.value = true
+  await checkOfficeDeletion(office)
+}
+
+// Check if school office can be deleted
+const checkOfficeDeletion = async (office: SchoolOffice) => {
+  if (!office.id) return
+
+  isCheckingDeletion.value = true
+  deletionBlockedReason.value = null
+  relatedSurveys.value = []
+
+  try {
+    // Check for surveys using this office
+    const surveysRes = await $api('/items/StudentEvaluationSurvey', {
+      params: {
+        filter: { office_id: { _eq: office.id } },
+        fields: ['id', 'title', 'survey_type', 'is_active', 'academic_term_id.schoolYear', 'academic_term_id.semester'],
+        limit: 10,
+      },
+    })
+
+    if (surveysRes.data && surveysRes.data.length > 0) {
+      relatedSurveys.value = surveysRes.data
+      deletionBlockedReason.value = 'surveys'
+    }
+  }
+  catch (error) {
+    console.error('Failed to check office deletion:', error)
+  }
+  finally {
+    isCheckingDeletion.value = false
+  }
 }
 
 // Save office (create or update)
@@ -126,6 +164,11 @@ const saveOffice = async () => {
 const deleteOffice = async () => {
   if (!selectedOffice.value?.id) return
 
+  // Don't allow deletion if office has dependencies
+  if (deletionBlockedReason.value) {
+    return
+  }
+
   try {
     await $api(`/items/SchoolOffices/${selectedOffice.value.id}`, {
       method: 'DELETE',
@@ -133,6 +176,8 @@ const deleteOffice = async () => {
 
     isDeleteDialogOpen.value = false
     selectedOffice.value = null
+    deletionBlockedReason.value = null
+    relatedSurveys.value = []
     await fetchOffices()
   }
   catch (error) {
@@ -307,18 +352,73 @@ onMounted(() => {
     <!-- Delete Confirmation Dialog -->
     <VDialog
       v-model="isDeleteDialogOpen"
-      max-width="400"
+      max-width="500"
     >
       <VCard>
-        <VCardTitle class="pa-6">
+        <VCardTitle class="pa-6 d-flex align-center gap-2">
+          <VIcon icon="ri-error-warning-line" color="error" />
           Delete School Office
         </VCardTitle>
 
         <VDivider />
 
         <VCardText class="pa-6">
-          Are you sure you want to delete <strong>{{ selectedOffice?.name }}</strong>?
-          This action cannot be undone.
+          <!-- Loading state -->
+          <div v-if="isCheckingDeletion" class="d-flex justify-center pa-4">
+            <VProgressCircular indeterminate color="primary" />
+          </div>
+
+          <template v-else>
+            <!-- Blocked: Has surveys -->
+            <template v-if="deletionBlockedReason === 'surveys'">
+              <VAlert
+                type="error"
+                variant="tonal"
+                class="mb-4"
+              >
+                <template #title>
+                  Cannot Delete School Office
+                </template>
+                This office has {{ relatedSurveys.length }}+ survey(s) associated with it. Please delete the surveys first.
+              </VAlert>
+
+              <p class="text-subtitle-2 mb-2">Surveys for this office (showing first 10):</p>
+              <VList density="compact" class="mb-4">
+                <VListItem
+                  v-for="survey in relatedSurveys"
+                  :key="survey.id"
+                  density="compact"
+                >
+                  <template #prepend>
+                    <VIcon icon="ri-survey-line" size="small" />
+                  </template>
+                  <VListItemTitle>
+                    {{ survey.title }}
+                  </VListItemTitle>
+                  <VListItemSubtitle>
+                    {{ survey.academic_term_id?.schoolYear }} {{ survey.academic_term_id?.semester }}
+                    <VChip
+                      :color="survey.is_active === 'Active' ? 'success' : 'secondary'"
+                      size="x-small"
+                      class="ms-2"
+                    >
+                      {{ survey.is_active }}
+                    </VChip>
+                  </VListItemSubtitle>
+                </VListItem>
+              </VList>
+            </template>
+
+            <!-- Can delete -->
+            <template v-else>
+              <p class="mb-4">
+                Are you sure you want to delete <strong>{{ selectedOffice?.name }}</strong>?
+              </p>
+              <p class="text-error font-weight-medium mb-0">
+                This action cannot be undone.
+              </p>
+            </template>
+          </template>
         </VCardText>
 
         <VDivider />
@@ -329,9 +429,10 @@ onMounted(() => {
             variant="outlined"
             @click="isDeleteDialogOpen = false"
           >
-            Cancel
+            {{ deletionBlockedReason ? 'Close' : 'Cancel' }}
           </VBtn>
           <VBtn
+            v-if="!deletionBlockedReason && !isCheckingDeletion"
             color="error"
             @click="deleteOffice"
           >

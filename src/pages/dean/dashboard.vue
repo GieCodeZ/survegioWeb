@@ -5,6 +5,7 @@ definePage({
   meta: {
     action: 'read',
     subject: 'DeanDashboard',
+    allowedRoles: ['dean'],
   },
 })
 
@@ -51,10 +52,10 @@ const hasPermissionError = ref(false)
 const permissionErrorMessage = ref('')
 
 const stats = ref({
-  totalSurveys: 0,
-  pendingSurveys: 0,
-  completedSurveys: 0,
-  completionRate: 0,
+  totalSurveys: null as number | null,
+  pendingSurveys: null as number | null,
+  completedSurveys: null as number | null,
+  completionRate: null as number | null,
 })
 
 const pendingEvaluations = ref<PendingEvaluation[]>([])
@@ -135,7 +136,7 @@ const fetchStats = async () => {
     const deanId = userData?.dean_id
 
     if (!deanId) {
-      stats.value = { totalSurveys: 0, pendingSurveys: 0, completedSurveys: 0, completionRate: 0 }
+      stats.value = { totalSurveys: null, pendingSurveys: null, completedSurveys: null, completionRate: null }
       return
     }
 
@@ -151,7 +152,7 @@ const fetchStats = async () => {
       },
     })
 
-    const allSurveys = surveysRes.data || []
+    const allSurveys = surveysRes.data
 
     // Count only teachers in dean's department
     let totalExpected = 0
@@ -190,22 +191,20 @@ const fetchStats = async () => {
           aggregate: { count: '*' },
         },
       })
-      stats.value.completedSurveys = Number(completedRes.data?.[0]?.count) || 0
+      stats.value.completedSurveys = Number(completedRes.data?.[0]?.count)
     }
     catch (responseError: any) {
       console.error('Failed to fetch completed responses count:', responseError)
-      stats.value.completedSurveys = 0
     }
 
     // Calculate pending
-    stats.value.pendingSurveys = Math.max(0, stats.value.totalSurveys - stats.value.completedSurveys)
+    if (stats.value.totalSurveys !== null && stats.value.completedSurveys !== null) {
+      stats.value.pendingSurveys = Math.max(0, stats.value.totalSurveys - stats.value.completedSurveys)
+    }
 
     // Calculate completion rate
-    if (stats.value.totalSurveys > 0) {
+    if (stats.value.totalSurveys !== null && stats.value.totalSurveys > 0 && stats.value.completedSurveys !== null) {
       stats.value.completionRate = Math.round((stats.value.completedSurveys / stats.value.totalSurveys) * 100)
-    }
-    else {
-      stats.value.completionRate = 0
     }
   }
   catch (error: any) {
@@ -245,7 +244,7 @@ const fetchPendingEvaluations = async () => {
       },
     })
 
-    const allSurveys = res.data || []
+    const allSurveys = res.data
 
     // Get completed evaluations by this dean
     const completedRes = await $api('/items/DeanSurveyResponses', {
@@ -341,7 +340,7 @@ const fetchRecentActivity = async () => {
 
 // Format date
 const formatDate = (dateStr: string): string => {
-  if (!dateStr) return '-'
+  if (!dateStr) return ''
   try {
     return new Date(dateStr).toLocaleDateString('en-US', {
       month: 'short',
