@@ -66,6 +66,7 @@ interface StudentSurvey {
   evaluation_type: 'Class' | 'Office'
   office_id?: SchoolOffice | number | null
   assignment_mode?: 'all' | 'department' | 'specific'
+  student_percentage?: number
   question_group?: StudentSurveyGroup[]
   classes?: SurveyClass[]
   students?: SurveyStudent[]
@@ -205,11 +206,12 @@ const getQuestionsCount = (survey: StudentSurvey): number => {
 }
 
 const getTotalStudents = (survey: StudentSurvey): number => {
+  let total = 0
+
   // For class-based surveys, count students from assigned classes
   if (survey.evaluation_type === 'Class') {
     if (!survey.classes || !Array.isArray(survey.classes)) return 0
 
-    let total = 0
     for (const classItem of survey.classes) {
       if (typeof classItem.classes_id === 'object' && classItem.classes_id !== null) {
         const classData = classItem.classes_id
@@ -218,24 +220,25 @@ const getTotalStudents = (survey: StudentSurvey): number => {
         }
       }
     }
-    return total
   }
-
   // For office-based surveys, count based on assignment_mode
-  if (survey.evaluation_type === 'Office') {
+  else if (survey.evaluation_type === 'Office') {
     const assignmentMode = survey.assignment_mode || 'all'
 
     if (assignmentMode === 'all') {
       // All students with at least one enrolled class
-      return totalStudentsWithClasses.value
+      total = totalStudentsWithClasses.value
     }
-
-    // For 'specific' and 'department' modes, students are stored in junction table
-    if (!survey.students || !Array.isArray(survey.students)) return 0
-    return survey.students.length
+    else {
+      // For 'specific' and 'department' modes, students are stored in junction table
+      if (!survey.students || !Array.isArray(survey.students)) return 0
+      total = survey.students.length
+    }
   }
 
-  return 0
+  // Apply student_percentage if set (default to 100%)
+  const percentage = survey.student_percentage ?? 100
+  return Math.ceil(total * (percentage / 100))
 }
 
 const getProgress = (survey: StudentSurvey): number => {
