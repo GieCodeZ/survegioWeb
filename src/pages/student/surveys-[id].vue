@@ -208,7 +208,7 @@ const fetchSurvey = async () => {
     const [surveyRes] = await Promise.all([
       $api(`/items/StudentEvaluationSurvey/${surveyId.value}`, {
         params: {
-          fields: ['id', 'title', 'instruction', 'is_active', 'evaluation_type', 'question_group.*', 'question_group.questions.*'],
+          fields: ['id', 'title', 'instruction', 'is_active', 'evaluation_type', 'students.students_id', 'question_group.*', 'question_group.questions.*'],
         },
       }),
       fetchClassInfo(),
@@ -216,6 +216,18 @@ const fetchSurvey = async () => {
       fetchStudentYearLevel(),
     ])
     survey.value = surveyRes.data
+
+    // Validate that student is assigned to this survey
+    const userData = useCookie('userData').value as any
+    const studentId = userData?.student_id ? Number(userData.student_id) : null
+    const assignedStudentIds = (surveyRes.data?.students || []).map((s: any) => Number(s.students_id))
+
+    // If there are assigned students and current student is not in the list, show error
+    if (assignedStudentIds.length > 0 && studentId && !assignedStudentIds.includes(studentId)) {
+      snackbar.value = { show: true, message: 'You are not assigned to this survey', color: 'error' }
+      setTimeout(() => router.push('/student/surveys'), 1500)
+      return
+    }
   }
   catch (error) {
     console.error('Failed to fetch survey:', error)

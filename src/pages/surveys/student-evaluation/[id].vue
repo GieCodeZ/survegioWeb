@@ -178,6 +178,30 @@ interface OfficeReportData {
   }[]
 }
 
+// Helper function to randomly select a percentage of items from an array
+// Uses a seeded approach based on survey ID for consistency
+const selectRandomPercentage = <T>(items: T[], percentage: number, seed: number): T[] => {
+  if (percentage >= 100) return [...items]
+  if (percentage <= 0 || items.length === 0) return []
+
+  const count = Math.ceil(items.length * (percentage / 100))
+
+  // Shuffle array using Fisher-Yates with seeded random
+  const shuffled = [...items]
+  let seedValue = seed
+  const seededRandom = () => {
+    seedValue = (seedValue * 9301 + 49297) % 233280
+    return seedValue / 233280
+  }
+
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(seededRandom() * (i + 1))
+    ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+  }
+
+  return shuffled.slice(0, count)
+}
+
 const route = useRoute()
 const router = useRouter()
 
@@ -927,11 +951,20 @@ const deselectAllDepartments = () => {
 }
 
 // Total expected students for this survey
+// Now uses the junction table count since students are assigned there (with percentage applied)
 const totalExpectedStudents = computed(() => {
-  if (form.value.evaluation_type === 'Class') {
-    return totalAssignedStudents.value
+  // If we have students in the junction table, use that count (accurate after percentage selection)
+  if (assignedStudentIds.value.length > 0) {
+    return assignedStudentIds.value.length
   }
-  return totalAssignedStudentsForOffice.value
+  // Fallback to old calculation for surveys without junction data yet
+  if (form.value.evaluation_type === 'Class') {
+    return estimatedStudentsAfterPercentage.value
+  }
+  // For office-based, apply percentage
+  const total = totalAssignedStudentsForOffice.value
+  const percentage = form.value.student_percentage ?? 100
+  return Math.ceil(total * (percentage / 100))
 })
 
 // Pending responses count
@@ -941,36 +974,37 @@ const pendingResponsesCount = computed(() => {
 
 // Pending responses by program/department
 const pendingByProgram = computed(() => {
-  // Get all assigned student IDs
-  let assignedStudents: StudentItem[] = []
+  // Get all assigned students from junction table (this respects the percentage selection)
+  // assignedStudentIds contains the actual students assigned via the junction table
+  let assignedStudents: StudentItem[] = availableStudents.value.filter(s =>
+    assignedStudentIds.value.includes(s.id),
+  )
 
-  if (form.value.evaluation_type === 'Class') {
-    // Get students from assigned classes
-    const assignedClassItems = availableClasses.value.filter(c => assignedClassIds.value.includes(c.id))
-    const studentIdsInClasses = new Set<number>()
-    for (const classItem of assignedClassItems) {
-      if (classItem.student_id) {
-        for (const s of classItem.student_id) {
-          studentIdsInClasses.add(s.id)
+  // Fallback to old logic if no students in junction table yet
+  if (assignedStudents.length === 0) {
+    if (form.value.evaluation_type === 'Class') {
+      // Get students from assigned classes
+      const assignedClassItems = availableClasses.value.filter(c => assignedClassIds.value.includes(c.id))
+      const studentIdsInClasses = new Set<number>()
+      for (const classItem of assignedClassItems) {
+        if (classItem.student_id) {
+          for (const s of classItem.student_id) {
+            studentIdsInClasses.add(s.id)
+          }
         }
       }
-    }
-    assignedStudents = availableStudents.value.filter(s => studentIdsInClasses.has(s.id))
-  }
-  else {
-    // Office-based
-    if (form.value.assignment_mode === 'all') {
-      assignedStudents = availableStudents.value
-    }
-    else if (form.value.assignment_mode === 'department') {
-      assignedStudents = availableStudents.value.filter(s =>
-        assignedDepartmentIds.value.includes(s.deparment_id || 0),
-      )
+      assignedStudents = availableStudents.value.filter(s => studentIdsInClasses.has(s.id))
     }
     else {
-      assignedStudents = availableStudents.value.filter(s =>
-        assignedStudentIds.value.includes(s.id),
-      )
+      // Office-based fallback
+      if (form.value.assignment_mode === 'all') {
+        assignedStudents = availableStudents.value
+      }
+      else if (form.value.assignment_mode === 'department') {
+        assignedStudents = availableStudents.value.filter(s =>
+          assignedDepartmentIds.value.includes(s.deparment_id || 0),
+        )
+      }
     }
   }
 
@@ -2105,63 +2139,132 @@ const saveSurvey = async () => {
       }
     }
 
-    console.log('Saving with data:', JSON.stringify(requestBody, null, 2))
+    // Save student_percentage for office-based surveys too
+    if (form.value.evaluation_type === 'Office') {
+      requestBody.student_percentage = form.value.student_percentage
+    }
 
     await $api(`/items/StudentEvaluationSurvey/${surveyId.value}`, {
       method: 'PATCH',
       body: requestBody,
     })
 
-    // Handle student assignments for office-based surveys via M2M
-    if (form.value.evaluation_type === 'Office' && (form.value.assignment_mode === 'specific' || form.value.assignment_mode === 'department')) {
-      // Determine which student IDs to assign
-      let studentIdsToAssign: number[] = []
+    // Handle student assignments via M2M (for both Class and Office evaluation types)
+    // This ensures student_percentage is enforced by saving selected students to junction table
+    let studentIdsToAssign: number[] = []
 
-      if (form.value.assignment_mode === 'specific') {
-        studentIdsToAssign = assignedStudentIds.value
+    if (form.value.evaluation_type === 'Class') {
+      // For class-based surveys: fetch all students from assigned classes directly
+      // (don't rely on availableClasses which might not be loaded)
+      const allStudentIds = new Set<number>()
+
+      if (assignedClassIds.value.length > 0) {
+        // Fetch classes with their students - need to get the actual student ID from junction
+        const classesRes = await $api('/items/classes', {
+          params: {
+            filter: {
+              id: { _in: assignedClassIds.value },
+            },
+            fields: ['id', 'student_id.*', 'student_id.students_id.id'],
+            limit: -1,
+          },
+        })
+
+        for (const classItem of (classesRes.data || [])) {
+          if (classItem.student_id && Array.isArray(classItem.student_id)) {
+            for (const junctionEntry of classItem.student_id) {
+              // The actual student ID might be in students_id field of the junction
+              let studentId: number | null = null
+              if (junctionEntry?.students_id) {
+                // Junction table format: { id: junctionId, students_id: { id: studentId } } or { id: junctionId, students_id: studentId }
+                studentId = typeof junctionEntry.students_id === 'object'
+                  ? junctionEntry.students_id?.id
+                  : junctionEntry.students_id
+              }
+              else if (junctionEntry?.id) {
+                // Direct format: { id: studentId }
+                studentId = junctionEntry.id
+              }
+
+              if (studentId) {
+                allStudentIds.add(studentId)
+              }
+            }
+          }
+        }
+      }
+
+      const allStudentsArray = Array.from(allStudentIds)
+      // Apply percentage selection
+      studentIdsToAssign = selectRandomPercentage(allStudentsArray, form.value.student_percentage, surveyId.value)
+    }
+    else if (form.value.evaluation_type === 'Office') {
+      if (form.value.assignment_mode === 'all') {
+        // For 'all' mode: get all students with at least one enrolled class
+        const studentsWithClassesRes = await $api('/items/students', {
+          params: {
+            fields: ['id'],
+            filter: {
+              classes: { _nnull: true },
+            },
+            limit: -1,
+          },
+        })
+        const allStudentIds = (studentsWithClassesRes.data || []).map((s: any) => s.id)
+        studentIdsToAssign = selectRandomPercentage(allStudentIds, form.value.student_percentage, surveyId.value)
+      }
+      else if (form.value.assignment_mode === 'specific') {
+        // Apply percentage to manually selected students
+        studentIdsToAssign = selectRandomPercentage(assignedStudentIds.value, form.value.student_percentage, surveyId.value)
       }
       else if (form.value.assignment_mode === 'department') {
-        // Get all students from selected departments
-        studentIdsToAssign = availableStudents.value
+        // Get all students from selected departments, then apply percentage
+        const departmentStudents = availableStudents.value
           .filter(s => assignedDepartmentIds.value.includes(s.deparment_id || 0))
           .map(s => s.id)
+        studentIdsToAssign = selectRandomPercentage(departmentStudents, form.value.student_percentage, surveyId.value)
       }
+    }
 
-      // Get existing student assignments with junction IDs
-      const existingRes = await $api(`/items/StudentEvaluationSurvey/${surveyId.value}`, {
-        params: {
-          fields: ['students.id', 'students.students_id'],
-        },
-      })
-      const existingJunctions = existingRes.data?.students || []
+    // Get existing student assignments with junction IDs
+    const existingRes = await $api(`/items/StudentEvaluationSurvey/${surveyId.value}`, {
+      params: {
+        fields: ['students.id', 'students.students_id'],
+      },
+    })
+    const existingJunctions = existingRes.data?.students || []
 
-      // Map current student IDs and their junction IDs
-      const currentStudentMap = new Map<number, number>()
-      existingJunctions.forEach((j: any) => {
-        const studentId = typeof j.students_id === 'object' ? j.students_id?.id : j.students_id
-        if (studentId && j.id) {
-          currentStudentMap.set(studentId, j.id)
-        }
-      })
-      const currentStudentIds = Array.from(currentStudentMap.keys())
+    // Map current student IDs and their junction IDs
+    const currentStudentMap = new Map<number, number>()
+    existingJunctions.forEach((j: any) => {
+      const studentId = typeof j.students_id === 'object' ? j.students_id?.id : j.students_id
+      if (studentId && j.id) {
+        currentStudentMap.set(studentId, j.id)
+      }
+    })
+    const currentStudentIds = Array.from(currentStudentMap.keys())
 
-      // Determine what to create and delete
-      const toCreate = studentIdsToAssign.filter(id => !currentStudentIds.includes(id))
-      const toDelete = currentStudentIds
-        .filter(id => !studentIdsToAssign.includes(id))
-        .map(id => currentStudentMap.get(id)!)
+    // Determine what to create and delete
+    const studentsToCreate = studentIdsToAssign.filter(id => !currentStudentIds.includes(id))
+    const studentsToDelete = currentStudentIds
+      .filter(id => !studentIdsToAssign.includes(id))
+      .map(id => currentStudentMap.get(id)!)
 
-      // Update via M2M format
+    // Update via M2M format
+    if (studentsToCreate.length > 0 || studentsToDelete.length > 0) {
+      // Match the same format used for classes M2M
+      const createPayload = studentsToCreate.map(studentId => ({
+        StudentEvaluationSurvey_id: surveyId.value.toString(),
+        students_id: { id: studentId },
+      }))
+
       await $api(`/items/StudentEvaluationSurvey/${surveyId.value}`, {
         method: 'PATCH',
         body: {
           students: {
-            create: toCreate.map(studentId => ({
-              StudentEvaluationSurvey_id: surveyId.value.toString(),
-              students_id: { id: studentId },
-            })),
+            create: createPayload,
             update: [],
-            delete: toDelete,
+            delete: studentsToDelete,
           },
         },
       })
@@ -2198,6 +2301,8 @@ watch(activeTab, (newTab) => {
     if (availableDepartments.value.length === 0) {
       fetchDepartments()
     }
+    // Always fetch assigned students from junction table (needed for accurate counts with percentage)
+    fetchAssignedStudents()
     if (form.value.evaluation_type === 'Class' && availableClasses.value.length === 0) {
       fetchClasses()
       fetchAssignedClasses()
