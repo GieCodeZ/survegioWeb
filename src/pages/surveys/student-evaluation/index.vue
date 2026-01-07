@@ -206,6 +206,14 @@ const getQuestionsCount = (survey: StudentSurvey): number => {
 }
 
 const getTotalStudents = (survey: StudentSurvey): number => {
+  // Now that students are assigned to the junction table based on student_percentage,
+  // we can simply count the students in the junction table
+  if (survey.students && Array.isArray(survey.students) && survey.students.length > 0) {
+    return survey.students.length
+  }
+
+  // Fallback for old surveys that don't have students assigned yet
+  // (calculate based on classes/offices and apply percentage)
   let total = 0
 
   // For class-based surveys, count students from assigned classes

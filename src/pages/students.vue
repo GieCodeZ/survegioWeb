@@ -122,7 +122,7 @@ const getYearLevelDisplay = (yearLevel: string | undefined): string => {
 // Get student full name
 const getFullName = (student: Student) => {
   const middle = student.middle_name ? ` ${student.middle_name}` : ''
-  return `${student.last_name}, ${student.first_name}${middle}`
+  return `${student.last_name || ''}, ${student.first_name || ''}${middle}`
 }
 
 // Get department display
@@ -700,7 +700,7 @@ onMounted(() => {
               variant="tonal"
             >
               <span class="text-body-1 font-weight-medium">
-                {{ item.first_name.charAt(0) }}{{ item.last_name.charAt(0) }}
+                {{ (item.first_name || '').charAt(0) }}{{ (item.last_name || '').charAt(0) }}
               </span>
             </VAvatar>
             <div>

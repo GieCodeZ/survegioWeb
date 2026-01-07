@@ -186,7 +186,7 @@ const headers = [
 const getFullName = (teacher: Teacher) => {
   const middle = teacher.middle_name ? ` ${teacher.middle_name}` : ''
 
-  return `${teacher.last_name}, ${teacher.first_name}${middle}`
+  return `${teacher.last_name || ''}, ${teacher.first_name || ''}${middle}`
 }
 
 // Get department name for a teacher - lookup by checking if teacher is in department's teacher_id
@@ -846,7 +846,7 @@ onMounted(() => {
               variant="tonal"
             >
               <span class="text-body-1 font-weight-medium">
-                {{ item.first_name.charAt(0) }}{{ item.last_name.charAt(0) }}
+                {{ (item.first_name || '').charAt(0) }}{{ (item.last_name || '').charAt(0) }}
               </span>
             </VAvatar>
             <span class="font-weight-medium">{{ getFullName(item) }}</span>

@@ -323,7 +323,14 @@ const fetchPendingEvaluations = async () => {
         }
       }
       else {
-        // Class-based survey logic (existing)
+        // Class-based survey logic
+        // First check if student is in the students junction table (enforces student_percentage)
+        const assignedStudentIds = (survey.students || []).map((s: any) => Number(s.students_id))
+        if (assignedStudentIds.length > 0 && !assignedStudentIds.includes(sid)) {
+          // Student is not in the assigned list - skip this survey
+          continue
+        }
+
         const surveyClasses = survey.classes || []
 
         // Extract class data from junction table
