@@ -37,7 +37,6 @@ const search = ref('')
 
 // Table headers for teachers
 const headers = [
-  { title: 'ID', key: 'id', sortable: true, width: '80px' },
   { title: 'Name', key: 'name', sortable: true },
   { title: 'Position', key: 'position', sortable: true },
   { title: 'Email', key: 'email', sortable: true },

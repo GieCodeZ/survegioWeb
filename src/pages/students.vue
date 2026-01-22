@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { $api } from '@/utils/api'
+import { useStudents } from '@/composables/useStudents'
+import type { AccountCredential, Student, StudentForm } from '@/types'
 import { DEFAULT_GENDER, DEFAULT_STATUS, GENDER_OPTIONS, STATUS_OPTIONS, YEAR_LEVEL_OPTIONS } from '@/utils/constants'
 
 definePage({
@@ -10,50 +11,31 @@ definePage({
   },
 })
 
-interface Department {
-  id: number
-  name: { id: number; programName: string; programCode: string } | number | null
-}
+// Use the students composable
+const {
+  students,
+  departments,
+  classes,
+  isLoading,
+  fetchStudents,
+  fetchSupportingData,
+  createStudent,
+  updateStudent,
+  deleteStudent,
+  createAccounts,
+  resetPassword,
+  filterByStatus,
+  studentsWithoutAccounts,
+  departmentOptions,
+  classOptions,
+  getFullName,
+  hasAccount,
+  isActive,
+  extractClassIds,
+  getDepartmentId,
+} = useStudents()
 
-interface ClassItem {
-  id: number
-  section: string
-  course_id?: { courseCode: string } | number | null
-}
-
-interface Student {
-  id?: number
-  student_number: string
-  first_name: string
-  middle_name: string
-  last_name: string
-  email: string
-  gender: string
-  birthdate: string
-  deparment_id: Department | number | null
-  class_id?: any[]
-  user_id?: string | null
-  is_active?: string
-  year_level?: string
-}
-
-interface AccountCredential {
-  name: string
-  email: string
-  password: string
-}
-
-interface Role {
-  id: string
-  name: string
-}
-
-// State
-const students = ref<Student[]>([])
-const departments = ref<Department[]>([])
-const classes = ref<ClassItem[]>([])
-const roles = ref<Role[]>([])
-const isLoading = ref(false)
+// Dialog state
 const isDialogOpen = ref(false)
 const isDeleteDialogOpen = ref(false)
 const isEditing = ref(false)
@@ -72,34 +54,27 @@ const studentToReset = ref<Student | null>(null)
 const resetPasswordCredential = ref<AccountCredential | null>(null)
 const isResettingPassword = ref(false)
 
-const form = ref({
-  id: undefined as number | undefined,
+// Form state
+const form = ref<StudentForm>({
   student_number: '',
   first_name: '',
   middle_name: '',
   last_name: '',
   email: '',
   gender: DEFAULT_GENDER,
-  birthdate: '',
-  deparment_id: null as number | null,
-  class_id: [] as number[],
-  is_active: DEFAULT_STATUS as string,
-  user_id: null as string | null,
-  year_level: null as string | null,
+  deparment_id: null,
+  class_id: [],
+  is_active: DEFAULT_STATUS,
+  user_id: null,
+  year_level: null,
 })
 
+// Filters
 const search = ref('')
 const statusFilter = ref<string | null>(null)
 
-// Filtered students by status
-const filteredStudents = computed(() => {
-  let result = students.value
-
-  if (statusFilter.value)
-    result = result.filter(student => student.is_active === statusFilter.value)
-
-  return result
-})
+// Filtered students
+const filteredStudents = computed(() => filterByStatus(statusFilter.value))
 
 // Table headers
 const headers = [
@@ -113,50 +88,6 @@ const headers = [
   { title: 'Actions', key: 'actions', sortable: false, align: 'center' as const },
 ]
 
-// Get year level display
-const getYearLevelDisplay = (yearLevel: string | undefined): string => {
-  if (!yearLevel) return '-'
-  return yearLevel
-}
-
-// Get student full name
-const getFullName = (student: Student) => {
-  const middle = student.middle_name ? ` ${student.middle_name}` : ''
-  return `${student.last_name || ''}, ${student.first_name || ''}${middle}`
-}
-
-// Get department display
-const getDepartment = (student: Student): string => {
-  if (!student.deparment_id) return ''
-
-  if (typeof student.deparment_id === 'object' && student.deparment_id !== null) {
-    const name = student.deparment_id.name
-    if (typeof name === 'object' && name !== null)
-      return name.programCode
-
-    // If name is just an ID, lookup from departments
-    const dept = departments.value.find(d => d.id === student.deparment_id)
-    if (dept && typeof dept.name === 'object' && dept.name !== null)
-      return dept.name.programCode
-  }
-
-  // If deparment_id is just a number
-  const dept = departments.value.find(d => d.id === student.deparment_id)
-  if (dept && typeof dept.name === 'object' && dept.name !== null)
-    return dept.name.programCode
-
-  return ''
-}
-
-// Department options for dropdown
-const departmentOptions = computed(() => {
-  return departments.value.map(dept => ({
-    id: dept.id,
-    title: typeof dept.name === 'object' && dept.name !== null ? dept.name.programCode : '',
-    subtitle: typeof dept.name === 'object' && dept.name !== null ? dept.name.programName : '',
-  }))
-})
-
 // Selected department computed with getter/setter
 const selectedDepartment = computed({
   get: () => {
@@ -165,229 +96,31 @@ const selectedDepartment = computed({
   },
   set: (val) => {
     form.value.deparment_id = val?.id || null
-    // Clear class selection when department changes
     form.value.class_id = []
   },
 })
 
-// Class options filtered by selected department
-const classOptions = computed(() => {
-  return classes.value.map(cls => ({
-    id: cls.id,
-    title: cls.section,
-    subtitle: typeof cls.course_id === 'object' && cls.course_id !== null ? cls.course_id.courseCode : '',
-  }))
-})
+// Get department display
+const getDepartment = (student: Student): string => {
+  if (!student.deparment_id) return ''
 
-// Fetch students from Directus
-const fetchStudents = async () => {
-  isLoading.value = true
-  try {
-    const res = await $api('/items/students', {
-      params: {
-        fields: ['*', 'deparment_id.*', 'deparment_id.name.*', 'class_id.*'],
-      },
-    })
-
-    students.value = res.data
-  }
-  catch (error) {
-    console.error('Failed to fetch students:', error)
-  }
-  finally {
-    isLoading.value = false
-  }
-}
-
-// Fetch departments
-const fetchDepartments = async () => {
-  try {
-    const res = await $api('/items/Department', {
-      params: {
-        fields: ['id', 'name.id', 'name.programName', 'name.programCode'],
-      },
-    })
-
-    departments.value = res.data
-  }
-  catch (error) {
-    console.error('Failed to fetch departments:', error)
-  }
-}
-
-// Fetch classes
-const fetchClasses = async () => {
-  try {
-    const res = await $api('/items/classes', {
-      params: {
-        fields: ['id', 'section', 'course_id.courseCode', 'department_id'],
-      },
-    })
-
-    classes.value = res.data
-  }
-  catch (error) {
-    console.error('Failed to fetch classes:', error)
-  }
-}
-
-// Fetch roles
-const fetchRoles = async () => {
-  try {
-    const res = await $api('/roles', {
-      params: {
-        fields: ['id', 'name'],
-      },
-    })
-
-    roles.value = res.data
-  }
-  catch (error) {
-    console.error('Failed to fetch roles:', error)
-  }
-}
-
-// Get role ID by name
-const getRoleId = (roleName: string): string | null => {
-  const role = roles.value.find(r => r.name.toLowerCase() === roleName.toLowerCase())
-  return role?.id
-}
-
-// Open dialog for creating new student
-const openCreateDialog = () => {
-  isEditing.value = false
-  form.value = {
-    id: undefined,
-    student_number: '',
-    first_name: '',
-    middle_name: '',
-    last_name: '',
-    email: '',
-    gender: DEFAULT_GENDER,
-    birthdate: '',
-    deparment_id: null,
-    class_id: [],
-    is_active: DEFAULT_STATUS,
-    user_id: null,
-    year_level: null,
-  }
-  isDialogOpen.value = true
-}
-
-// Open dialog for editing student
-const openEditDialog = (student: Student) => {
-  isEditing.value = true
-
-  // Extract department ID
-  let deptId: number | null = null
-  if (student.deparment_id) {
-    deptId = typeof student.deparment_id === 'object'
-      ? student.deparment_id.id
-      : student.deparment_id
+  if (typeof student.deparment_id === 'object' && student.deparment_id !== null) {
+    const name = student.deparment_id.name
+    if (typeof name === 'object' && name !== null) return name.programCode
+    const dept = departments.value.find(d => d.id === (student.deparment_id as any).id)
+    if (dept && typeof dept.name === 'object' && dept.name !== null) return dept.name.programCode
   }
 
-  // Extract class IDs from junction table
-  const classIds = student.class_id
-    ? student.class_id.map((c: any) => c.classes_id || c.id).filter(Boolean)
-    : []
+  const deptId = typeof student.deparment_id === 'object' ? student.deparment_id.id : student.deparment_id
+  const dept = departments.value.find(d => d.id === deptId)
+  if (dept && typeof dept.name === 'object' && dept.name !== null) return dept.name.programCode
 
-  form.value = {
-    id: student.id,
-    student_number: student.student_number,
-    first_name: student.first_name,
-    middle_name: student.middle_name || '',
-    last_name: student.last_name,
-    email: student.email,
-    gender: student.gender,
-    birthdate: student.birthdate || '',
-    deparment_id: deptId,
-    class_id: classIds,
-    is_active: student.is_active,
-    user_id: student.user_id || null,
-    year_level: student.year_level || null,
-  }
-
-  isDialogOpen.value = true
-}
-
-// Open delete confirmation dialog
-const openDeleteDialog = (student: Student) => {
-  selectedStudent.value = student
-  isDeleteDialogOpen.value = true
-}
-
-// Update Directus user status based on is_active
-const updateUserStatus = async (userId: string, isActive: string) => {
-  if (!userId)
-    return
-
-  try {
-    // In Directus, user status: 'active' = can login, 'suspended' = cannot login
-    const userStatus = isActive === 'Active' ? 'active' : 'suspended'
-
-    await $api(`/users/${userId}`, {
-      method: 'PATCH',
-      body: { status: userStatus },
-    })
-  }
-  catch (error) {
-    console.error('Failed to update user status:', error)
-  }
-}
-
-// Save student (create or update)
-const saveStudent = async () => {
-  try {
-    const body: any = {
-      student_number: form.value.student_number,
-      first_name: form.value.first_name,
-      middle_name: form.value.middle_name,
-      last_name: form.value.last_name,
-      email: form.value.email,
-      gender: form.value.gender,
-      birthdate: form.value.birthdate || null,
-      deparment_id: form.value.deparment_id,
-      is_active: form.value.is_active,
-      year_level: form.value.year_level,
-    }
-
-    // Handle class_id - Directus M2M expects array of junction objects or IDs
-    if (form.value.class_id.length > 0) {
-      body.class_id = form.value.class_id.map(classId => ({ classes_id: classId }))
-    }
-    else {
-      body.class_id = []
-    }
-
-    if (isEditing.value && form.value.id) {
-      await $api(`/items/students/${form.value.id}`, {
-        method: 'PATCH',
-        body,
-      })
-
-      // Update user account status if student has an account
-      if (form.value.user_id)
-        await updateUserStatus(form.value.user_id, form.value.is_active)
-    }
-    else {
-      await $api('/items/students', {
-        method: 'POST',
-        body,
-      })
-    }
-
-    isDialogOpen.value = false
-    await fetchStudents()
-  }
-  catch (error) {
-    console.error('Failed to save student:', error)
-  }
+  return ''
 }
 
 // Get class names for a student
 const getStudentClasses = (student: Student): string[] => {
-  if (!student.class_id || !Array.isArray(student.class_id))
-    return []
+  if (!student.class_id || !Array.isArray(student.class_id)) return []
 
   return student.class_id.map((c: any) => {
     const classId = c.classes_id || c.id
@@ -402,120 +135,109 @@ const getStudentClasses = (student: Student): string[] => {
   }).filter(Boolean)
 }
 
-// Delete student
-const deleteStudent = async () => {
-  if (!selectedStudent.value?.id)
-    return
-
-  try {
-    // Delete the Directus user account if exists
-    if (selectedStudent.value.user_id) {
-      try {
-        await $api(`/users/${selectedStudent.value.user_id}`, {
-          method: 'DELETE',
-        })
-      }
-      catch (error) {
-        console.error('Failed to delete user account:', error)
-      }
-    }
-
-    // Delete the student record (junction table entries are automatically deleted)
-    await $api(`/items/students/${selectedStudent.value.id}`, {
-      method: 'DELETE',
-    })
-
-    isDeleteDialogOpen.value = false
-    selectedStudent.value = null
-    await fetchStudents()
-  }
-  catch (error) {
-    console.error('Failed to delete student:', error)
+// Reset form to default values
+const resetForm = () => {
+  form.value = {
+    student_number: '',
+    first_name: '',
+    middle_name: '',
+    last_name: '',
+    email: '',
+    gender: DEFAULT_GENDER,
+    deparment_id: null,
+    class_id: [],
+    is_active: DEFAULT_STATUS,
+    user_id: null,
+    year_level: null,
   }
 }
 
-// Generate random password
-const generatePassword = (length = 12): string => {
-  const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%'
-  let password = ''
-  for (let i = 0; i < length; i++)
-    password += charset.charAt(Math.floor(Math.random() * charset.length))
-  return password
+// Open dialog for creating new student
+const openCreateDialog = () => {
+  isEditing.value = false
+  resetForm()
+  isDialogOpen.value = true
 }
 
-// Check if student has account
-const hasAccount = (student: Student): boolean => {
-  return !!student.user_id
-}
-
-// Check if student is active
-const isActive = (student: Student): boolean => {
-  return student.is_active === 'Active'
-}
-
-// Get students without accounts from selection (only Active students)
-const studentsWithoutAccounts = computed(() => {
-  return selectedStudents.value.filter(s => !hasAccount(s) && isActive(s))
-})
-
-// Create accounts for selected students
-const createAccounts = async () => {
-  if (studentsWithoutAccounts.value.length === 0)
-    return
-
-  const studentRoleId = getRoleId('student')
-  if (!studentRoleId) {
-    console.error('Student role not found. Please create a "student" role in Directus.')
-    return
+// Open dialog for editing student
+const openEditDialog = (student: Student) => {
+  isEditing.value = true
+  form.value = {
+    id: student.id,
+    student_number: student.student_number,
+    first_name: student.first_name,
+    middle_name: student.middle_name || '',
+    last_name: student.last_name,
+    email: student.email,
+    gender: student.gender,
+    deparment_id: getDepartmentId(student),
+    class_id: extractClassIds(student),
+    is_active: student.is_active || DEFAULT_STATUS,
+    user_id: student.user_id || null,
+    year_level: student.year_level || null,
   }
+  isDialogOpen.value = true
+}
+
+// Open delete confirmation dialog
+const openDeleteDialog = (student: Student) => {
+  selectedStudent.value = student
+  isDeleteDialogOpen.value = true
+}
+
+// Save student (create or update)
+const saveStudent = async () => {
+  if (isEditing.value && form.value.id) {
+    await updateStudent(form.value.id, form.value)
+  }
+  else {
+    await createStudent(form.value)
+  }
+  isDialogOpen.value = false
+}
+
+// Handle delete student
+const handleDeleteStudent = async () => {
+  if (!selectedStudent.value) return
+  await deleteStudent(selectedStudent.value)
+  isDeleteDialogOpen.value = false
+  selectedStudent.value = null
+}
+
+// Handle create accounts
+const handleCreateAccounts = async () => {
+  const toCreate = studentsWithoutAccounts(selectedStudents.value)
+  if (toCreate.length === 0) return
 
   isCreatingAccounts.value = true
-  createdCredentials.value = []
+  createdCredentials.value = await createAccounts(toCreate)
+  selectedStudents.value = []
+  isCreatingAccounts.value = false
+  isAccountDialogOpen.value = true
+}
 
-  try {
-    for (const student of studentsWithoutAccounts.value) {
-      const password = generatePassword()
+// Confirm password reset
+const confirmResetPassword = (student: Student) => {
+  if (!student.user_id) return
+  studentToReset.value = student
+  isResetConfirmDialogOpen.value = true
+}
 
-      // Create Directus user
-      const userRes = await $api('/users', {
-        method: 'POST',
-        body: {
-          email: student.email,
-          password,
-          first_name: student.first_name,
-          last_name: student.last_name,
-          role: studentRoleId,
-        },
-      })
+// Handle password reset
+const handleResetPassword = async () => {
+  if (!studentToReset.value) return
 
-      if (userRes?.data?.id) {
-        // Link user to student record
-        await $api(`/items/students/${student.id}`, {
-          method: 'PATCH',
-          body: { user_id: userRes.data.id },
-        })
-
-        createdCredentials.value.push({
-          name: getFullName(student),
-          email: student.email,
-          password,
-        })
-      }
-    }
-
-    await fetchStudents()
-    selectedStudents.value = []
-    isAccountDialogOpen.value = true
-  }
-  catch (error) {
-    console.error('Failed to create accounts:', error)
-  }
-  finally {
-    isCreatingAccounts.value = false
+  isResettingPassword.value = true
+  isResetConfirmDialogOpen.value = false
+  resetPasswordCredential.value = await resetPassword(studentToReset.value)
+  isResettingPassword.value = false
+  studentToReset.value = null
+  if (resetPasswordCredential.value) {
+    isResetPasswordDialogOpen.value = true
   }
 }
 
-// Copy credentials to clipboard
+// Clipboard and export helpers
 const copyCredentials = () => {
   const text = createdCredentials.value
     .map(c => `${c.name}\nEmail: ${c.email}\nPassword: ${c.password}`)
@@ -523,24 +245,13 @@ const copyCredentials = () => {
   navigator.clipboard.writeText(text)
 }
 
-// Export credentials to CSV
 const exportCredentials = () => {
   if (createdCredentials.value.length === 0) return
-
-  // Create CSV content
-  const headers = ['Name', 'Email', 'Password']
-  const rows = createdCredentials.value.map(c => [
-    `"${c.name}"`,
-    `"${c.email}"`,
-    `"${c.password}"`,
-  ])
-
   const csvContent = [
-    headers.join(','),
-    ...rows.map(row => row.join(',')),
+    'Name,Email,Password',
+    ...createdCredentials.value.map(c => `"${c.name}","${c.email}","${c.password}"`),
   ].join('\n')
 
-  // Create blob and download
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
@@ -552,61 +263,16 @@ const exportCredentials = () => {
   URL.revokeObjectURL(url)
 }
 
-// Open confirmation dialog before resetting password
-const confirmResetPassword = (student: Student) => {
-  if (!student.user_id) return
-  studentToReset.value = student
-  isResetConfirmDialogOpen.value = true
-}
-
-// Reset password for a student after confirmation
-const resetPassword = async () => {
-  if (!studentToReset.value?.user_id) return
-
-  isResettingPassword.value = true
-  isResetConfirmDialogOpen.value = false
-
-  try {
-    const password = generatePassword()
-
-    await $api(`/users/${studentToReset.value.user_id}`, {
-      method: 'PATCH',
-      body: { password },
-    })
-
-    resetPasswordCredential.value = {
-      name: getFullName(studentToReset.value),
-      email: studentToReset.value.email,
-      password,
-    }
-    isResetPasswordDialogOpen.value = true
-  }
-  catch (error) {
-    console.error('Failed to reset password:', error)
-  }
-  finally {
-    isResettingPassword.value = false
-    studentToReset.value = null
-  }
-}
-
-// Copy single credential to clipboard
 const copySingleCredential = () => {
   if (!resetPasswordCredential.value) return
   const c = resetPasswordCredential.value
-  const text = `${c.name}\nEmail: ${c.email}\nPassword: ${c.password}`
-  navigator.clipboard.writeText(text)
+  navigator.clipboard.writeText(`${c.name}\nEmail: ${c.email}\nPassword: ${c.password}`)
 }
 
-// Export single credential to CSV
 const exportSingleCredential = () => {
   if (!resetPasswordCredential.value) return
   const c = resetPasswordCredential.value
-
-  const csvContent = [
-    'Name,Email,Password',
-    `"${c.name}","${c.email}","${c.password}"`,
-  ].join('\n')
+  const csvContent = `Name,Email,Password\n"${c.name}","${c.email}","${c.password}"`
 
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
   const url = URL.createObjectURL(blob)
@@ -619,12 +285,13 @@ const exportSingleCredential = () => {
   URL.revokeObjectURL(url)
 }
 
+// Computed for active students without accounts
+const activeStudentsWithoutAccounts = computed(() => studentsWithoutAccounts(selectedStudents.value))
+
 // Fetch data on mount
 onMounted(() => {
   fetchStudents()
-  fetchDepartments()
-  fetchClasses()
-  fetchRoles()
+  fetchSupportingData()
 })
 </script>
 
@@ -656,15 +323,15 @@ onMounted(() => {
           style="max-width: 150px;"
         />
         <VBtn
-          v-if="studentsWithoutAccounts.length > 0"
+          v-if="activeStudentsWithoutAccounts.length > 0"
           color="success"
           variant="outlined"
           prepend-icon="ri-user-add-line"
           class="me-4"
           :loading="isCreatingAccounts"
-          @click="createAccounts"
+          @click="handleCreateAccounts"
         >
-          Create Accounts ({{ studentsWithoutAccounts.length }})
+          Create Accounts ({{ activeStudentsWithoutAccounts.length }})
         </VBtn>
         <VBtn
           color="primary"
@@ -722,7 +389,7 @@ onMounted(() => {
             variant="tonal"
             color="info"
           >
-            {{ getYearLevelDisplay(item.year_level) }}
+            {{ item.year_level }}
           </VChip>
           <span v-else class="text-medium-emphasis">-</span>
         </template>
@@ -758,10 +425,7 @@ onMounted(() => {
 
         <template #item.actions="{ item }">
           <div class="d-flex justify-center gap-1">
-            <IconBtn
-              size="small"
-              @click="openEditDialog(item)"
-            >
+            <IconBtn size="small" @click="openEditDialog(item)">
               <VIcon icon="ri-pencil-line" />
             </IconBtn>
             <IconBtn
@@ -773,11 +437,7 @@ onMounted(() => {
             >
               <VIcon icon="ri-lock-password-line" />
             </IconBtn>
-            <IconBtn
-              size="small"
-              color="error"
-              @click="openDeleteDialog(item)"
-            >
+            <IconBtn size="small" color="error" @click="openDeleteDialog(item)">
               <VIcon icon="ri-delete-bin-line" />
             </IconBtn>
           </div>
@@ -792,11 +452,7 @@ onMounted(() => {
     </VCard>
 
     <!-- Create/Edit Dialog -->
-    <VDialog
-      v-model="isDialogOpen"
-      max-width="700"
-      persistent
-    >
+    <VDialog v-model="isDialogOpen" max-width="700" persistent>
       <VCard>
         <VCardTitle class="pa-6">
           {{ isEditing ? 'Edit Student' : 'Add New Student' }}
@@ -812,7 +468,6 @@ onMounted(() => {
                 label="Student Number"
                 placeholder="e.g., A2021-000001"
                 variant="outlined"
-                :rules="[v => !!v || 'Student number is required']"
               />
             </VCol>
             <VCol cols="12" md="8">
@@ -825,81 +480,32 @@ onMounted(() => {
                 return-object
                 variant="outlined"
                 placeholder="Select department..."
-                :rules="[v => !!v || 'Department is required']"
               >
                 <template #item="{ item, props }">
                   <VListItem v-bind="props">
-                    <template #title>
-                      {{ item.raw.title }}
-                    </template>
-                    <template #subtitle>
-                      {{ item.raw.subtitle }}
-                    </template>
+                    <template #title>{{ item.raw.title }}</template>
+                    <template #subtitle>{{ item.raw.subtitle }}</template>
                   </VListItem>
                 </template>
               </VSelect>
             </VCol>
             <VCol cols="12" md="4">
-              <VTextField
-                v-model="form.first_name"
-                label="First Name"
-                placeholder="Enter first name"
-                variant="outlined"
-                :rules="[v => !!v || 'First name is required']"
-              />
+              <VTextField v-model="form.first_name" label="First Name" variant="outlined" />
             </VCol>
             <VCol cols="12" md="4">
-              <VTextField
-                v-model="form.middle_name"
-                label="Middle Name"
-                placeholder="Enter middle name"
-                variant="outlined"
-              />
+              <VTextField v-model="form.middle_name" label="Middle Name" variant="outlined" />
             </VCol>
             <VCol cols="12" md="4">
-              <VTextField
-                v-model="form.last_name"
-                label="Last Name"
-                placeholder="Enter last name"
-                variant="outlined"
-                :rules="[v => !!v || 'Last name is required']"
-              />
+              <VTextField v-model="form.last_name" label="Last Name" variant="outlined" />
             </VCol>
             <VCol cols="12" md="6">
-              <VTextField
-                v-model="form.email"
-                label="Email"
-                placeholder="Enter email address"
-                type="email"
-                variant="outlined"
-                :rules="[v => !!v || 'Email is required', v => /.+@.+\..+/.test(v) || 'Email must be valid']"
-              />
+              <VTextField v-model="form.email" label="Email" type="email" variant="outlined" />
             </VCol>
             <VCol cols="12" md="6">
-              <VTextField
-                v-model="form.birthdate"
-                label="Birthdate"
-                type="date"
-                variant="outlined"
-              />
+              <VSelect v-model="form.gender" label="Gender" :items="GENDER_OPTIONS" variant="outlined" />
             </VCol>
             <VCol cols="12" md="6">
-              <VSelect
-                v-model="form.gender"
-                label="Gender"
-                :items="GENDER_OPTIONS"
-                variant="outlined"
-                :rules="[v => !!v || 'Gender is required']"
-              />
-            </VCol>
-            <VCol cols="12" md="6">
-              <VSelect
-                v-model="form.is_active"
-                label="Status"
-                :items="STATUS_OPTIONS"
-                variant="outlined"
-                :rules="[v => !!v || 'Status is required']"
-              />
+              <VSelect v-model="form.is_active" label="Status" :items="STATUS_OPTIONS" variant="outlined" />
             </VCol>
             <VCol cols="12" md="6">
               <VSelect
@@ -909,7 +515,6 @@ onMounted(() => {
                 item-title="title"
                 item-value="value"
                 variant="outlined"
-                placeholder="Select year level..."
               />
             </VCol>
             <VCol cols="12">
@@ -923,18 +528,11 @@ onMounted(() => {
                 multiple
                 chips
                 closable-chips
-                placeholder="Select classes..."
-                hint="Select the classes this student is enrolled in"
-                persistent-hint
               >
                 <template #item="{ item, props }">
                   <VListItem v-bind="props">
-                    <template #title>
-                      {{ item.raw.title }}
-                    </template>
-                    <template #subtitle>
-                      {{ item.raw.subtitle }}
-                    </template>
+                    <template #title>{{ item.raw.title }}</template>
+                    <template #subtitle>{{ item.raw.subtitle }}</template>
                   </VListItem>
                 </template>
               </VAutocomplete>
@@ -946,15 +544,10 @@ onMounted(() => {
 
         <VCardActions class="pa-4">
           <VSpacer />
-          <VBtn
-            variant="outlined"
-            @click="isDialogOpen = false"
-          >
-            Cancel
-          </VBtn>
+          <VBtn variant="outlined" @click="isDialogOpen = false">Cancel</VBtn>
           <VBtn
             color="primary"
-            :disabled="!form.student_number || !form.first_name || !form.last_name || !form.email || !form.gender || !form.deparment_id"
+            :disabled="!form.student_number || !form.first_name || !form.last_name || !form.email"
             @click="saveStudent"
           >
             {{ isEditing ? 'Update' : 'Create' }}
@@ -964,10 +557,7 @@ onMounted(() => {
     </VDialog>
 
     <!-- Delete Confirmation Dialog -->
-    <VDialog
-      v-model="isDeleteDialogOpen"
-      max-width="500"
-    >
+    <VDialog v-model="isDeleteDialogOpen" max-width="500">
       <VCard>
         <VCardTitle class="pa-6 d-flex align-center gap-2">
           <VIcon icon="ri-error-warning-line" color="error" />
@@ -981,85 +571,45 @@ onMounted(() => {
             Are you sure you want to delete <strong>{{ selectedStudent ? getFullName(selectedStudent) : '' }}</strong>?
           </p>
 
-          <!-- Warning for user account -->
-          <VAlert
-            v-if="selectedStudent?.user_id"
-            type="warning"
-            variant="tonal"
-            class="mb-3"
-          >
-            <template #title>
-              User Account Will Be Deleted
-            </template>
-            This student has an associated user account. The account will be permanently deleted and they will no longer be able to log in.
+          <VAlert v-if="selectedStudent?.user_id" type="warning" variant="tonal" class="mb-3">
+            <template #title>User Account Will Be Deleted</template>
+            This student has an associated user account that will be permanently deleted.
           </VAlert>
 
-          <!-- Warning for class enrollments -->
           <VAlert
             v-if="selectedStudent && getStudentClasses(selectedStudent).length > 0"
             type="info"
             variant="tonal"
             class="mb-3"
           >
-            <template #title>
-              Class Enrollments Will Be Removed
-            </template>
-            <div>
-              This student will be removed from the following classes:
-              <ul class="mt-2 ps-4">
-                <li v-for="className in getStudentClasses(selectedStudent)" :key="className">
-                  {{ className }}
-                </li>
-              </ul>
-            </div>
+            <template #title>Class Enrollments Will Be Removed</template>
+            <ul class="mt-2 ps-4">
+              <li v-for="className in getStudentClasses(selectedStudent)" :key="className">{{ className }}</li>
+            </ul>
           </VAlert>
 
-          <p class="text-error font-weight-medium mb-0">
-            This action cannot be undone.
-          </p>
+          <p class="text-error font-weight-medium mb-0">This action cannot be undone.</p>
         </VCardText>
 
         <VDivider />
 
         <VCardActions class="pa-4">
           <VSpacer />
-          <VBtn
-            variant="outlined"
-            @click="isDeleteDialogOpen = false"
-          >
-            Cancel
-          </VBtn>
-          <VBtn
-            color="error"
-            @click="deleteStudent"
-          >
-            Delete Student
-          </VBtn>
+          <VBtn variant="outlined" @click="isDeleteDialogOpen = false">Cancel</VBtn>
+          <VBtn color="error" @click="handleDeleteStudent">Delete Student</VBtn>
         </VCardActions>
       </VCard>
     </VDialog>
 
     <!-- Account Credentials Dialog -->
-    <VDialog
-      v-model="isAccountDialogOpen"
-      max-width="600"
-    >
+    <VDialog v-model="isAccountDialogOpen" max-width="600">
       <VCard>
-        <VCardTitle class="pa-6">
-          Accounts Created Successfully
-        </VCardTitle>
-
+        <VCardTitle class="pa-6">Accounts Created Successfully</VCardTitle>
         <VDivider />
-
         <VCardText class="pa-6">
-          <VAlert
-            type="warning"
-            variant="tonal"
-            class="mb-4"
-          >
+          <VAlert type="warning" variant="tonal" class="mb-4">
             Please save these credentials. Passwords cannot be retrieved later.
           </VAlert>
-
           <VTable density="compact">
             <thead>
               <tr>
@@ -1077,95 +627,44 @@ onMounted(() => {
             </tbody>
           </VTable>
         </VCardText>
-
         <VDivider />
-
         <VCardActions class="pa-4">
-          <VBtn
-            variant="outlined"
-            prepend-icon="ri-file-copy-line"
-            @click="copyCredentials"
-          >
-            Copy All
-          </VBtn>
-          <VBtn
-            variant="outlined"
-            prepend-icon="ri-download-line"
-            @click="exportCredentials"
-          >
-            Export CSV
-          </VBtn>
+          <VBtn variant="outlined" prepend-icon="ri-file-copy-line" @click="copyCredentials">Copy All</VBtn>
+          <VBtn variant="outlined" prepend-icon="ri-download-line" @click="exportCredentials">Export CSV</VBtn>
           <VSpacer />
-          <VBtn
-            color="primary"
-            @click="isAccountDialogOpen = false"
-          >
-            Done
-          </VBtn>
+          <VBtn color="primary" @click="isAccountDialogOpen = false">Done</VBtn>
         </VCardActions>
       </VCard>
     </VDialog>
 
     <!-- Reset Password Confirmation Dialog -->
-    <VDialog
-      v-model="isResetConfirmDialogOpen"
-      max-width="400"
-    >
+    <VDialog v-model="isResetConfirmDialogOpen" max-width="400">
       <VCard>
-        <VCardTitle class="pa-6">
-          Confirm Password Reset
-        </VCardTitle>
-
+        <VCardTitle class="pa-6">Confirm Password Reset</VCardTitle>
         <VDivider />
-
         <VCardText class="pa-6">
           <p class="mb-2">Are you sure you want to reset the password for:</p>
           <p class="font-weight-bold text-primary">{{ studentToReset ? getFullName(studentToReset) : '' }}</p>
           <p class="text-medium-emphasis mt-2">{{ studentToReset?.email }}</p>
         </VCardText>
-
         <VDivider />
-
         <VCardActions class="pa-4">
           <VSpacer />
-          <VBtn
-            variant="outlined"
-            @click="isResetConfirmDialogOpen = false"
-          >
-            Cancel
-          </VBtn>
-          <VBtn
-            color="warning"
-            :loading="isResettingPassword"
-            @click="resetPassword"
-          >
-            Reset Password
-          </VBtn>
+          <VBtn variant="outlined" @click="isResetConfirmDialogOpen = false">Cancel</VBtn>
+          <VBtn color="warning" :loading="isResettingPassword" @click="handleResetPassword">Reset Password</VBtn>
         </VCardActions>
       </VCard>
     </VDialog>
 
     <!-- Reset Password Success Dialog -->
-    <VDialog
-      v-model="isResetPasswordDialogOpen"
-      max-width="450"
-    >
+    <VDialog v-model="isResetPasswordDialogOpen" max-width="450">
       <VCard>
-        <VCardTitle class="pa-6">
-          Password Reset Successfully
-        </VCardTitle>
-
+        <VCardTitle class="pa-6">Password Reset Successfully</VCardTitle>
         <VDivider />
-
         <VCardText class="pa-6">
-          <VAlert
-            type="warning"
-            variant="tonal"
-            class="mb-4"
-          >
+          <VAlert type="warning" variant="tonal" class="mb-4">
             Please save this password. It cannot be retrieved later.
           </VAlert>
-
           <div v-if="resetPasswordCredential" class="d-flex flex-column gap-2">
             <div>
               <span class="text-medium-emphasis">Name:</span>
@@ -1181,31 +680,12 @@ onMounted(() => {
             </div>
           </div>
         </VCardText>
-
         <VDivider />
-
         <VCardActions class="pa-4">
-          <VBtn
-            variant="outlined"
-            prepend-icon="ri-file-copy-line"
-            @click="copySingleCredential"
-          >
-            Copy
-          </VBtn>
-          <VBtn
-            variant="outlined"
-            prepend-icon="ri-download-line"
-            @click="exportSingleCredential"
-          >
-            Export CSV
-          </VBtn>
+          <VBtn variant="outlined" prepend-icon="ri-file-copy-line" @click="copySingleCredential">Copy</VBtn>
+          <VBtn variant="outlined" prepend-icon="ri-download-line" @click="exportSingleCredential">Export CSV</VBtn>
           <VSpacer />
-          <VBtn
-            color="primary"
-            @click="isResetPasswordDialogOpen = false"
-          >
-            Done
-          </VBtn>
+          <VBtn color="primary" @click="isResetPasswordDialogOpen = false">Done</VBtn>
         </VCardActions>
       </VCard>
     </VDialog>

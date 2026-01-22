@@ -309,6 +309,7 @@ declare global {
   const useSpeechSynthesis: typeof import('@vueuse/core')['useSpeechSynthesis']
   const useStepper: typeof import('@vueuse/core')['useStepper']
   const useStorageAsync: typeof import('@vueuse/core')['useStorageAsync']
+  const useStudents: typeof import('./src/composables/useStudents')['useStudents']
   const useStyleTag: typeof import('@vueuse/core')['useStyleTag']
   const useSum: typeof import('@vueuse/math')['useSum']
   const useSupported: typeof import('@vueuse/core')['useSupported']
@@ -677,6 +678,7 @@ declare module 'vue' {
     readonly useSpeechSynthesis: UnwrapRef<typeof import('@vueuse/core')['useSpeechSynthesis']>
     readonly useStepper: UnwrapRef<typeof import('@vueuse/core')['useStepper']>
     readonly useStorageAsync: UnwrapRef<typeof import('@vueuse/core')['useStorageAsync']>
+    readonly useStudents: UnwrapRef<typeof import('./src/composables/useStudents')['useStudents']>
     readonly useStyleTag: UnwrapRef<typeof import('@vueuse/core')['useStyleTag']>
     readonly useSum: UnwrapRef<typeof import('@vueuse/math')['useSum']>
     readonly useSupported: UnwrapRef<typeof import('@vueuse/core')['useSupported']>

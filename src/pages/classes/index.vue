@@ -83,20 +83,11 @@ const classSections = ref<ClassSection[]>([])
 const departments = ref<Department[]>([])
 const teachers = ref<Teacher[]>([])
 const isLoading = ref(false)
-const isDialogOpen = ref(false)
 const isDeleteDialogOpen = ref(false)
-const isEditing = ref(false)
 const selectedClass = ref<ClassItem | null>(null)
 
-const form = ref({
-  id: undefined as number | undefined,
-  acadTerm_id: null as number | null,
-  course_id: null as number | null,
-  section: '',
-  department_id: null as number | null,
-  teacher_id: null as number | null,
-  year_level: null as string | null,
-})
+// Track classes that are assigned to Active surveys
+const classesWithActiveSurveys = ref<Set<number>>(new Set())
 
 const search = ref('')
 const departmentFilter = ref<number | null>(null)
@@ -117,6 +108,8 @@ const selectedAcadTermForImport = ref<number | null>(null)
 const selectedDepartmentForImport = ref<number | null>(null)
 const selectedTeacherForImport = ref<number | null>(null)
 const selectedYearLevelForImport = ref<string | null>(null)
+const reimportClassId = ref<number | null>(null)
+const reimportClassInfo = ref<{ section: string; course: string } | null>(null)
 
 // Table headers
 const headers = [
@@ -223,51 +216,6 @@ const getStudentCount = (classItem: ClassItem): number => {
   return uniqueStudentIds.size
 }
 
-// Get selected department title for display
-const selectedDepartmentTitle = computed(() => {
-  if (!form.value.department_id) return ''
-  const dept = departmentOptions.value.find(d => d.id === form.value.department_id)
-  return dept?.title || ''
-})
-
-// Computed for department selection with proper object binding
-const selectedDepartment = computed({
-  get: () => {
-    if (!form.value.department_id) return null
-    return departmentOptions.value.find(d => d.id === form.value.department_id) || null
-  },
-  set: (val) => {
-    form.value.department_id = val?.id || null
-  },
-})
-
-// Get available sections based on selected department
-const availableSections = computed(() => {
-  const sections: string[] = []
-
-  // Get program code from selected department
-  const selectedProgramCode = selectedDepartmentTitle.value
-
-  for (const cs of classSections.value) {
-    if (cs.section && Array.isArray(cs.section)) {
-      let programCode = ''
-      if (typeof cs.program_id === 'object' && cs.program_id !== null)
-        programCode = cs.program_id.programCode
-
-      // If department is selected, only show sections for that program
-      if (selectedProgramCode && programCode !== selectedProgramCode)
-        continue
-
-      for (const sec of cs.section) {
-        const fullSection = programCode ? `${programCode}${sec}` : sec
-        if (!sections.includes(fullSection))
-          sections.push(fullSection)
-      }
-    }
-  }
-  return sections.sort()
-})
-
 // Get academic terms for dropdown
 const academicTermOptions = computed(() => {
   return academicTerms.value.map(term => ({
@@ -307,13 +255,6 @@ const filteredClasses = computed(() => {
     return classes.value
 
   return classes.value.filter(classItem => getClassDepartmentId(classItem) === departmentFilter.value)
-})
-
-// Watch for department changes to reset section
-watch(() => form.value.department_id, () => {
-  // Clear section when department changes (only if not editing)
-  if (!isEditing.value)
-    form.value.section = ''
 })
 
 // Get courses formatted for dropdown
@@ -359,6 +300,9 @@ const fetchClasses = async () => {
     })
 
     classes.value = res.data
+
+    // Also refresh which classes have active surveys
+    await fetchClassesWithActiveSurveys()
   }
   catch (error) {
     console.error('Failed to fetch classes:', error)
@@ -452,49 +396,80 @@ const fetchTeachers = async () => {
   }
 }
 
-// Open dialog for creating new class
-const openCreateDialog = () => {
-  isEditing.value = false
-  form.value = {
-    id: undefined,
-    acadTerm_id: null,
-    course_id: null,
-    section: '',
-    department_id: null,
-    teacher_id: null,
-    year_level: null,
+// Fetch classes that are assigned to Active surveys (directly or via students)
+const fetchClassesWithActiveSurveys = async () => {
+  try {
+    // Fetch Active surveys with both class and student assignments
+    const res = await $api('/items/StudentEvaluationSurvey', {
+      params: {
+        filter: { is_active: { _eq: 'Active' } },
+        fields: ['id', 'classes.classes_id', 'students.students_id'],
+      },
+    })
+
+    const protectedClassIds = new Set<number>()
+    const assignedStudentIds = new Set<number>()
+
+    // Collect directly assigned class IDs and student IDs
+    for (const survey of res.data || []) {
+      // Classes directly assigned to survey
+      for (const classItem of survey.classes || []) {
+        if (classItem.classes_id) {
+          protectedClassIds.add(classItem.classes_id)
+        }
+      }
+      // Students assigned to survey (for office-based surveys)
+      for (const studentItem of survey.students || []) {
+        if (studentItem.students_id) {
+          assignedStudentIds.add(studentItem.students_id)
+        }
+      }
+    }
+
+    // If there are assigned students, find which classes contain them
+    if (assignedStudentIds.size > 0) {
+      for (const classItem of classes.value) {
+        if (!classItem.id || protectedClassIds.has(classItem.id)) continue
+
+        // Check if any student in this class is assigned to an Active survey
+        const classStudentIds = (classItem.student_id || [])
+          .map((item: any) => item.students_id || item.id || item)
+          .filter((id: any) => typeof id === 'number')
+
+        const hasAssignedStudent = classStudentIds.some((studentId: number) =>
+          assignedStudentIds.has(studentId),
+        )
+
+        if (hasAssignedStudent) {
+          protectedClassIds.add(classItem.id)
+        }
+      }
+    }
+
+    classesWithActiveSurveys.value = protectedClassIds
   }
-  isDialogOpen.value = true
+  catch (error) {
+    console.error('Failed to fetch classes with active surveys:', error)
+  }
 }
 
-// Get department option by ID
-const getDepartmentOption = (deptId: number) => {
-  return departmentOptions.value.find(d => d.id === deptId) || null
+// Check if a class has an Active survey assigned
+const hasActiveSurvey = (classItem: ClassItem): boolean => {
+  return classItem.id ? classesWithActiveSurveys.value.has(classItem.id) : false
 }
 
-// Open dialog for editing class
-const openEditDialog = (classItem: ClassItem) => {
-  isEditing.value = true
-
-  // Extract IDs from relationships
+// Open re-import dialog for an existing class
+const openReimportDialog = (classItem: ClassItem) => {
+  // Extract IDs from relationships for pre-filling
   const acadTermId = typeof classItem.acadTerm_id === 'object' && classItem.acadTerm_id !== null
     ? classItem.acadTerm_id.id
     : classItem.acadTerm_id
 
-  const courseId = typeof classItem.course_id === 'object' && classItem.course_id !== null
-    ? classItem.course_id.id
-    : classItem.course_id
-
-  const teacherId = typeof classItem.teacher_id === 'object' && classItem.teacher_id !== null
-    ? classItem.teacher_id.id
-    : classItem.teacher_id
-
-  // Get first department ID from junction table (Department_id with capital D)
+  // Get first department ID from junction table
   let deptId: number | null = null
   if (classItem.department_id && classItem.department_id.length > 0) {
     const firstDept = classItem.department_id[0]
     if (typeof firstDept === 'object' && firstDept !== null) {
-      // Junction table structure: { id, classes_id, Department_id }
       deptId = (firstDept as any).Department_id || (firstDept as any).id || null
     }
     else {
@@ -502,71 +477,37 @@ const openEditDialog = (classItem: ClassItem) => {
     }
   }
 
-  form.value = {
-    id: classItem.id,
-    acadTerm_id: acadTermId,
-    course_id: courseId,
+  // Store class info for re-import
+  reimportClassId.value = classItem.id || null
+  reimportClassInfo.value = {
     section: classItem.section,
-    department_id: deptId,
-    teacher_id: teacherId ?? null,
-    year_level: classItem.year_level || null,
+    course: getCourse(classItem) || '',
   }
 
-  isDialogOpen.value = true
+  // Pre-fill import fields
+  selectedAcadTermForImport.value = acadTermId as number | null
+  selectedDepartmentForImport.value = deptId
+  selectedYearLevelForImport.value = classItem.year_level || null
+
+  // Reset other import state
+  importFile.value = null
+  parsedImportData.value = null
+  importError.value = ''
+  importStep.value = 'upload'
+  importResult.value = { success: false, message: '' }
+  selectedTeacherForImport.value = null
+
+  isImportDialogOpen.value = true
 }
 
 // Open delete confirmation dialog
 const openDeleteDialog = (classItem: ClassItem) => {
+  // Prevent opening dialog if class has an Active survey
+  if (hasActiveSurvey(classItem)) {
+    return
+  }
   selectedClass.value = classItem
   isDeleteDialogOpen.value = true
-}
-
-// Save class (create or update)
-const saveClass = async () => {
-  try {
-    const body: any = {
-      acadTerm_id: form.value.acadTerm_id,
-      course_id: form.value.course_id,
-      section: form.value.section,
-      teacher_id: form.value.teacher_id,
-      year_level: form.value.year_level,
-    }
-
-    // Handle department_id M2M - Directus expects junction table structure
-    if (form.value.department_id) {
-      body.department_id = [{ Department_id: form.value.department_id }]
-    }
-    else {
-      body.department_id = []
-    }
-
-    if (isEditing.value && form.value.id) {
-      await $api(`/items/classes/${form.value.id}`, {
-        method: 'PATCH',
-        body,
-      })
-    }
-    else {
-      await $api('/items/classes', {
-        method: 'POST',
-        body,
-      })
-    }
-
-    // Assign teacher to department if they don't have one assigned
-    if (form.value.teacher_id && form.value.department_id) {
-      const hasDept = await checkTeacherHasDepartment(form.value.teacher_id)
-      if (!hasDept) {
-        await assignTeacherToDepartment(form.value.teacher_id, form.value.department_id)
-      }
-    }
-
-    isDialogOpen.value = false
-    await fetchClasses()
-  }
-  catch (error) {
-    console.error('Failed to save class:', error)
-  }
 }
 
 // Delete class (keeps students but removes their class association)
@@ -641,7 +582,7 @@ const viewClassDetails = (classItem: ClassItem) => {
 
 // === IMPORT FUNCTIONS ===
 
-// Open import dialog
+// Open import dialog for new class
 const openImportDialog = () => {
   importFile.value = null
   parsedImportData.value = null
@@ -652,6 +593,8 @@ const openImportDialog = () => {
   selectedDepartmentForImport.value = null
   selectedTeacherForImport.value = null
   selectedYearLevelForImport.value = null
+  reimportClassId.value = null
+  reimportClassInfo.value = null
   isImportDialogOpen.value = true
 }
 
@@ -1025,7 +968,6 @@ const findOrCreateStudent = async (studentData: ImportedStudent, departmentId: n
     last_name: studentData.lastName,
     email: studentData.email || `${studentData.studentNo}@student.edu`,
     gender: studentData.gender || '',
-    birthdate: '',
     is_active: 'Active',
   }
 
@@ -1372,10 +1314,13 @@ const resetImport = () => {
   importError.value = ''
   importStep.value = 'upload'
   importResult.value = { success: false, message: '' }
-  selectedAcadTermForImport.value = null
-  selectedDepartmentForImport.value = null
+  // Keep the pre-filled values if re-importing
+  if (!reimportClassId.value) {
+    selectedAcadTermForImport.value = null
+    selectedDepartmentForImport.value = null
+    selectedYearLevelForImport.value = null
+  }
   selectedTeacherForImport.value = null
-  selectedYearLevelForImport.value = null
 }
 
 // Fetch data on mount
@@ -1386,6 +1331,7 @@ onMounted(() => {
   fetchClassSections()
   fetchDepartments()
   fetchTeachers()
+  fetchClassesWithActiveSurveys()
 })
 </script>
 
@@ -1419,20 +1365,11 @@ onMounted(() => {
           style="max-width: 180px;"
         />
         <VBtn
-          color="secondary"
-          variant="outlined"
+          color="primary"
           prepend-icon="ri-upload-2-line"
-          class="me-2"
           @click="openImportDialog"
         >
-          Import
-        </VBtn>
-        <VBtn
-          color="primary"
-          prepend-icon="ri-add-line"
-          @click="openCreateDialog"
-        >
-          Add Class
+          Import Class
         </VBtn>
       </VCardTitle>
 
@@ -1506,19 +1443,34 @@ onMounted(() => {
 
         <template #item.actions="{ item }">
           <div class="d-flex justify-center gap-1">
-            <IconBtn
-              size="small"
-              @click.stop="openEditDialog(item)"
-            >
-              <VIcon icon="ri-pencil-line" />
-            </IconBtn>
-            <IconBtn
-              size="small"
-              color="error"
-              @click.stop="openDeleteDialog(item)"
-            >
-              <VIcon icon="ri-delete-bin-line" />
-            </IconBtn>
+            <VTooltip location="top">
+              <template #activator="{ props }">
+                <IconBtn
+                  v-bind="props"
+                  size="small"
+                  color="primary"
+                  @click.stop="openReimportDialog(item)"
+                >
+                  <VIcon icon="ri-upload-2-line" />
+                </IconBtn>
+              </template>
+              Re-import class data
+            </VTooltip>
+            <VTooltip location="top">
+              <template #activator="{ props }">
+                <span v-bind="props">
+                  <IconBtn
+                    size="small"
+                    :color="hasActiveSurvey(item) ? 'default' : 'error'"
+                    :disabled="hasActiveSurvey(item)"
+                    @click.stop="openDeleteDialog(item)"
+                  >
+                    <VIcon :icon="hasActiveSurvey(item) ? 'ri-lock-line' : 'ri-delete-bin-line'" />
+                  </IconBtn>
+                </span>
+              </template>
+              {{ hasActiveSurvey(item) ? 'Cannot delete: Class or its students are assigned to an Active survey' : 'Delete class' }}
+            </VTooltip>
           </div>
         </template>
 
@@ -1529,178 +1481,6 @@ onMounted(() => {
         </template>
       </VDataTable>
     </VCard>
-
-    <!-- Create/Edit Dialog -->
-    <VDialog
-      v-model="isDialogOpen"
-      max-width="600"
-      persistent
-    >
-      <VCard>
-        <VCardTitle class="pa-6">
-          {{ isEditing ? 'Edit Class' : 'Add New Class' }}
-        </VCardTitle>
-
-        <VDivider />
-
-        <VCardText class="pa-6">
-          <VRow>
-            <VCol cols="12">
-              <VSelect
-                v-model="selectedDepartment"
-                label="Department"
-                :items="departmentOptions"
-                item-title="title"
-                item-value="id"
-                return-object
-                variant="outlined"
-                placeholder="Select department..."
-                hint="Select department first to filter sections"
-                persistent-hint
-                :rules="[v => !!v || 'Department is required']"
-              >
-                <template #item="{ item, props }">
-                  <VListItem v-bind="props">
-                    <template #title>
-                      {{ item.raw.title }}
-                    </template>
-                    <template #subtitle>
-                      {{ item.raw.subtitle }}
-                    </template>
-                  </VListItem>
-                </template>
-              </VSelect>
-            </VCol>
-            <VCol cols="12" md="6">
-              <VAutocomplete
-                v-model="form.section"
-                label="Section"
-                :items="availableSections"
-                variant="outlined"
-                placeholder="Type to search sections..."
-                :rules="[v => !!v || 'Section is required']"
-                :disabled="!form.department_id"
-                :hint="!form.department_id ? 'Select a department first' : ''"
-                persistent-hint
-              />
-            </VCol>
-            <VCol cols="12" md="6">
-              <VSelect
-                v-model="form.year_level"
-                label="Year Level"
-                :items="YEAR_LEVEL_OPTIONS"
-                item-title="title"
-                item-value="value"
-                variant="outlined"
-                placeholder="Select year level..."
-              />
-            </VCol>
-            <VCol cols="12">
-              <VAutocomplete
-                v-model="form.acadTerm_id"
-                label="Academic Term"
-                :items="academicTermOptions"
-                item-title="title"
-                item-value="id"
-                variant="outlined"
-                placeholder="Select academic term..."
-                :rules="[v => !!v || 'Academic term is required']"
-              >
-                <template #selection="{ item }">
-                  {{ item.raw?.title || '' }}
-                </template>
-                <template #item="{ item, props }">
-                  <VListItem v-bind="props">
-                    <template #title>
-                      {{ item.raw.title }}
-                    </template>
-                    <template #append>
-                      <VChip
-                        :color="item.raw.status === 'Active' ? 'success' : item.raw.status === 'Draft' ? 'warning' : 'secondary'"
-                        size="x-small"
-                      >
-                        {{ item.raw.status }}
-                      </VChip>
-                    </template>
-                  </VListItem>
-                </template>
-              </VAutocomplete>
-            </VCol>
-            <VCol cols="12">
-              <VAutocomplete
-                v-model="form.course_id"
-                label="Course"
-                :items="courseOptions"
-                item-title="title"
-                item-value="id"
-                variant="outlined"
-                placeholder="Type to search courses..."
-                :rules="[v => !!v || 'Course is required']"
-              >
-                <template #selection="{ item }">
-                  {{ item.raw?.title || '' }}
-                </template>
-                <template #item="{ item, props }">
-                  <VListItem v-bind="props">
-                    <template #title>
-                      {{ item.raw.title }}
-                    </template>
-                    <template #subtitle>
-                      {{ item.raw.subtitle }}
-                    </template>
-                  </VListItem>
-                </template>
-              </VAutocomplete>
-            </VCol>
-            <VCol cols="12">
-              <VAutocomplete
-                v-model="form.teacher_id"
-                label="Teacher"
-                :items="teacherOptions"
-                item-title="title"
-                item-value="id"
-                variant="outlined"
-                placeholder="Select teacher..."
-                clearable
-              >
-                <template #selection="{ item }">
-                  {{ item.raw?.title || '' }}
-                </template>
-                <template #item="{ item, props }">
-                  <VListItem v-bind="props">
-                    <template #title>
-                      {{ item.raw.title }}
-                    </template>
-                    <template #subtitle>
-                      {{ item.raw.subtitle }}
-                    </template>
-                  </VListItem>
-                </template>
-              </VAutocomplete>
-            </VCol>
-          </VRow>
-        </VCardText>
-
-        <VDivider />
-
-        <VCardActions class="pa-4">
-          <VSpacer />
-          <VBtn
-            variant="outlined"
-            @click="isDialogOpen = false"
-          >
-            Cancel
-          </VBtn>
-          <VBtn
-            color="primary"
-            :disabled="!form.department_id || !form.section || !form.acadTerm_id || !form.course_id"
-            @click="saveClass"
-          >
-            {{ isEditing ? 'Update' : 'Create' }}
-          </VBtn>
-        </VCardActions>
-      </VCard>
-    </VDialog>
 
     <!-- Delete Confirmation Dialog -->
     <VDialog
@@ -1761,7 +1541,7 @@ onMounted(() => {
       <VCard>
         <VCardTitle class="d-flex align-center pa-6">
           <VIcon icon="ri-upload-2-line" class="me-2" />
-          Import Class List
+          {{ reimportClassId ? 'Re-import Class Data' : 'Import Class List' }}
           <VSpacer />
           <VChip
             v-if="importStep === 'upload'"
@@ -1791,6 +1571,20 @@ onMounted(() => {
         <VCardText class="pa-6">
           <!-- Step 1: Upload -->
           <div v-if="importStep === 'upload'">
+            <!-- Re-import info banner -->
+            <VAlert
+              v-if="reimportClassInfo"
+              type="warning"
+              variant="tonal"
+              class="mb-4"
+            >
+              <template #title>Re-importing Class Data</template>
+              <div class="text-body-2">
+                You are updating class <strong>{{ reimportClassInfo.section }}</strong> ({{ reimportClassInfo.course }}).
+                Upload a new CSV file to update the student list and class information.
+              </div>
+            </VAlert>
+
             <VAlert
               type="info"
               variant="tonal"

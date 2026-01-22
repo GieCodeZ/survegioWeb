@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { $api } from '@/utils/api'
-import { SURVEY_STATUS_OPTIONS } from '@/utils/constants'
 
 definePage({
   meta: {

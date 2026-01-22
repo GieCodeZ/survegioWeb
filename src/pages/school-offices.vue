@@ -44,6 +44,20 @@ const headers = [
   { title: 'Actions', key: 'actions', sortable: false, align: 'center' as const },
 ]
 
+const snackbar = ref({
+  show: false,
+  message: '',
+  color: 'success', 
+})
+
+const showMessage = (message: string, color: string = 'success') => {
+  snackbar.value = {
+    show: true,
+    message,
+    color,
+  }
+}
+
 // Fetch offices from Directus
 const fetchOffices = async () => {
   isLoading.value = true
@@ -141,12 +155,14 @@ const saveOffice = async () => {
         method: 'PATCH',
         body,
       })
+      showMessage('School office updated successfully')
     }
     else {
       await $api('/items/SchoolOffices', {
         method: 'POST',
         body,
       })
+      showMessage('School office created successfully')
     }
 
     isDialogOpen.value = false
@@ -154,6 +170,7 @@ const saveOffice = async () => {
   }
   catch (error) {
     console.error('Failed to save school office:', error)
+    showMessage('Failed to save school office.', 'error')
   }
   finally {
     isSaving.value = false
@@ -295,7 +312,7 @@ onMounted(() => {
     <!-- Create/Edit Dialog -->
     <VDialog
       v-model="isDialogOpen"
-      max-width="500"
+      max-width="400"
       persistent
     >
       <VCard>
@@ -311,18 +328,32 @@ onMounted(() => {
               <VTextField
                 v-model="form.name"
                 label="Office Name"
-                placeholder="e.g., Registrar, Cashier, Library"
+                placeholder="e.g., Registrar, Clinic, Library"
                 variant="outlined"
+                density="comfortable"
                 :rules="[v => !!v || 'Office name is required']"
               />
             </VCol>
-            <VCol cols="12">
-              <VSwitch
-                v-model="form.is_active"
-                label="Active"
-                color="success"
-                hide-details
-              />
+
+            <VCol cols="12" class="pt-0">
+              <div class="pa-4 border rounded d-flex align-center justify-space-between bg-grey-lighten-5">
+                <div>
+                  <div class="text-subtitle-1">Office Status</div>
+                  <div class="text-caption text-medium-emphasis">
+                    Enable or disable this office
+                  </div>
+                </div>
+                
+                <VSwitch
+                  v-model="form.is_active"
+                  :label="form.is_active ? 'Active' : 'Inactive'"
+                  color="success"
+                  hide-details
+                  inset
+                  density="compact"
+                  class="ms-4"
+                />
+              </div>
             </VCol>
           </VRow>
         </VCardText>
@@ -441,5 +472,22 @@ onMounted(() => {
         </VCardActions>
       </VCard>
     </VDialog>
+    <VSnackbar
+      v-model="snackbar.show"
+      :color="snackbar.color"
+      :timeout="3000"
+      location="top end"
+    >
+      {{ snackbar.message }}
+
+      <template #actions>
+        <VBtn
+          icon="ri-close-line"
+          variant="text"
+          density="comfortable"
+          @click="snackbar.show = false"
+        />
+      </template>
+    </VSnackbar>    
   </div>
 </template>

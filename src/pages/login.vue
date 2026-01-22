@@ -34,6 +34,9 @@ const credentials = ref({
 
 const rememberMe = ref(!!savedEmail)
 
+const isSnackbarVisible = ref(false)
+const snackbarColor = ref('error') // 'error' for red, 'success' for green
+
 const isLoading = ref(false)
 
 // Check if redirected due to session expiration
@@ -321,23 +324,13 @@ const login = async () => {
     })
   }
   catch (err: any) {
-    console.error(err)
+  console.error("Login Error:", err)
+  snackbarColor.value = 'error'
+  isSnackbarVisible.value = true
 
-    // Handle Directus error responses
-    if (err.data?.errors) {
-      const directusError = err.data.errors[0]
-
-      if (directusError.extensions?.code === 'INVALID_CREDENTIALS') {
-        errors.value.email = 'Invalid email or password'
-      }
-      else {
-        errors.value.email = directusError.message || 'Login failed'
-      }
-    }
-    else {
-      errors.value.email = 'An error occurred. Please try again.'
-    }
-  }
+  // Optional: Clear only the password so the user can try again immediately
+  credentials.value.password = ''
+}
   finally {
     isLoading.value = false
   }
@@ -431,6 +424,7 @@ const onSubmit = () => {
                     type="email"
                     autofocus
                     :rules="[requiredValidator, emailValidator]"
+                    @update:model-value="errors.email = undefined"
                     :error-messages="errors.email"
                     variant="outlined"
                   />
@@ -443,6 +437,7 @@ const onSubmit = () => {
                     label="Password"
                     placeholder="Enter your password"
                     :rules="[requiredValidator]"
+                    @update:model-value="errors.password = undefined"
                     :type="isPasswordVisible ? 'text' : 'password'"
                     :error-messages="errors.password"
                     :append-inner-icon="isPasswordVisible ? 'ri-eye-off-line' : 'ri-eye-line'"
@@ -456,12 +451,6 @@ const onSubmit = () => {
                       label="Remember me"
                       density="compact"
                     />
-                    <RouterLink
-                      class="text-primary text-body-2"
-                      :to="{ name: 'forgot-password' }"
-                    >
-                      Forgot Password?
-                    </RouterLink>
                   </div>
 
                   <VBtn
@@ -475,26 +464,22 @@ const onSubmit = () => {
                     Login
                   </VBtn>
                 </VCol>
-
-                <!-- back to home -->
-                <VCol
-                  cols="12"
-                  class="text-center"
-                >
-                  <RouterLink
-                    class="text-primary text-body-2"
-                    :to="{ name: 'landing' }"
-                  >
-                    <VIcon icon="ri-arrow-left-line" size="16" class="me-1" />
-                    Back to Home
-                  </RouterLink>
-                </VCol>
               </VRow>
             </VForm>
           </VCardText>
         </VCard>
       </VCol>
     </VRow>
+    <VSnackbar
+      v-model="isSnackbarVisible"
+      color="error"
+      location="top end"
+      timeout="4000"
+    >
+      <div class="text-justify w-100">
+        Login Failed. Invalid user credentials
+      </div>
+    </VSnackbar>
   </div>
 </template>
 

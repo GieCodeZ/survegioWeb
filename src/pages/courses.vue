@@ -44,6 +44,20 @@ const headers = [
   { title: 'Actions', key: 'actions', sortable: false, align: 'center' as const },
 ]
 
+const snackbar = ref({
+  show: false,
+  message: '',
+  color: 'success', 
+})
+
+const showMessage = (message: string, color: string = 'success') => {
+  snackbar.value = {
+    show: true,
+    message,
+    color,
+  }
+}
+
 // Fetch courses from Directus
 const fetchCourses = async () => {
   isLoading.value = true
@@ -127,6 +141,7 @@ const saveCourse = async () => {
           courseName: form.value.courseName,
         },
       })
+      showMessage('Course updated successfully')
     }
     else {
       // Create new course
@@ -137,6 +152,7 @@ const saveCourse = async () => {
           courseName: form.value.courseName,
         },
       })
+      showMessage('Course created successfully')
     }
 
     isDialogOpen.value = false
@@ -144,6 +160,7 @@ const saveCourse = async () => {
   }
   catch (error) {
     console.error('Failed to save course:', error)
+    showMessage('Failed to save course.', 'error')
   }
 }
 
@@ -384,5 +401,22 @@ onMounted(() => {
         </VCardActions>
       </VCard>
     </VDialog>
+    <VSnackbar
+      v-model="snackbar.show"
+      :color="snackbar.color"
+      :timeout="3000"
+      location="top end"
+    >
+      {{ snackbar.message }}
+
+      <template #actions>
+        <VBtn
+          icon="ri-close-line"
+          variant="text"
+          density="comfortable"
+          @click="snackbar.show = false"
+        />
+      </template>
+    </VSnackbar>
   </div>
 </template>

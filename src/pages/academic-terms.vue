@@ -65,6 +65,20 @@ const headers = [
   { title: 'Actions', key: 'actions', sortable: false, align: 'center' as const },
 ]
 
+const snackbar = ref({
+  show: false,
+  message: '',
+  color: 'success', 
+})
+
+const showMessage = (message: string, color: string = 'success') => {
+  snackbar.value = {
+    show: true,
+    message,
+    color,
+  }
+}
+
 // Format date for display
 const formatDate = (dateString: string | null | undefined) => {
   if (!dateString)
@@ -119,7 +133,7 @@ const openCreateDialog = () => {
     startDate: '',
     endDate: '',
     semester: '',
-    status: '',
+    status: 'Draft', // Default to Draft
   }
   isDialogOpen.value = true
 }
@@ -199,40 +213,43 @@ const checkTermDeletion = async (term: AcademicTerm) => {
   }
 }
 
-// Check if this is the only active term
-const isOnlyActiveTerm = computed(() => {
-  if (!isEditing.value || !form.value.id)
-    return false
-
-  const originalTerm = academicTerms.value.find(t => t.id === form.value.id)
-  if (originalTerm?.status !== 'Active')
-    return false
-
-  const activeTerms = academicTerms.value.filter(t => t.status === 'Active')
-
-  return activeTerms.length === 1
+// Get the current active term (for display purposes)
+const currentActiveTerm = computed(() => {
+  return academicTerms.value.find(t => t.status === 'Active')
 })
 
-// Get available status options based on current state
-const availableStatusOptions = computed(() => {
-  if (isOnlyActiveTerm.value) {
-    // If this is the only active term, only allow "Active" status
-    return ['Active']
+// Check if setting to Active will archive another term
+const willArchiveExistingTerm = computed(() => {
+  if (form.value.status !== 'Active') return false
+  const activeTerm = currentActiveTerm.value
+  if (!activeTerm) return false
+  // If editing the currently active term, no archiving needed
+  if (isEditing.value && form.value.id === activeTerm.id) return false
+  return true
+})
+
+// Archive the currently active term (if any)
+const archiveCurrentActiveTerm = async (excludeId?: number) => {
+  const currentActiveTerm = academicTerms.value.find(
+    t => t.status === 'Active' && t.id !== excludeId,
+  )
+
+  if (currentActiveTerm?.id) {
+    await $api(`/items/academicTerms/${currentActiveTerm.id}`, {
+      method: 'PATCH',
+      body: { status: 'Archived' },
+    })
   }
-
-  return statusOptions.value
-})
+}
 
 // Save term (create or update)
 const saveTerm = async () => {
-  // Validation: Can't change the only active term to another status
-  if (isEditing.value && isOnlyActiveTerm.value && form.value.status !== 'Active') {
-    alert('Cannot change status. There must always be at least one active academic term.')
-
-    return
-  }
-
   try {
+    // If setting status to Active, archive any existing active term first
+    if (form.value.status === 'Active') {
+      await archiveCurrentActiveTerm(form.value.id)
+    }
+
     if (isEditing.value && form.value.id) {
       // Update existing term
       await $api(`/items/academicTerms/${form.value.id}`, {
@@ -245,6 +262,7 @@ const saveTerm = async () => {
           status: form.value.status,
         },
       })
+      showMessage('Academic term updated successfully')
     }
     else {
       // Create new term
@@ -258,6 +276,7 @@ const saveTerm = async () => {
           status: form.value.status,
         },
       })
+      showMessage('Academic term created successfully')
     }
 
     isDialogOpen.value = false
@@ -265,6 +284,7 @@ const saveTerm = async () => {
   }
   catch (error) {
     console.error('Failed to save academic term:', error)
+    showMessage('Failed to save academic term.', 'error')
   }
 }
 
@@ -488,12 +508,19 @@ onMounted(() => {
               <VSelect
                 v-model="form.status"
                 label="Status"
-                :items="availableStatusOptions"
+                :items="statusOptions"
                 variant="outlined"
                 :rules="[v => !!v || 'Status is required']"
-                :hint="isOnlyActiveTerm ? 'This is the only active term. Status cannot be changed.' : ''"
-                :persistent-hint="isOnlyActiveTerm"
               />
+              <VAlert
+                v-if="willArchiveExistingTerm"
+                type="warning"
+                variant="tonal"
+                density="compact"
+                class="mt-2"
+              >
+                Setting this term to Active will archive "{{ currentActiveTerm?.schoolYear }} - {{ currentActiveTerm?.semester }}".
+              </VAlert>
             </VCol>
           </VRow>
         </VCardText>
@@ -651,5 +678,23 @@ onMounted(() => {
         </VCardActions>
       </VCard>
     </VDialog>
+
+    <VSnackbar
+      v-model="snackbar.show"
+      :color="snackbar.color"
+      :timeout="3000"
+      location="top end"
+    >
+      {{ snackbar.message }}
+
+      <template #actions>
+        <VBtn
+          icon="ri-close-line"
+          variant="text"
+          density="comfortable"
+          @click="snackbar.show = false"
+        />
+      </template>
+    </VSnackbar>
   </div>
 </template>

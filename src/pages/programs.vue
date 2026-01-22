@@ -43,6 +43,19 @@ const headers = [
   { title: 'Actions', key: 'actions', sortable: false, align: 'center' as const },
 ]
 
+const snackbar = ref({
+  show: false,
+  message: '',
+  color: 'success', 
+})
+
+const showMessage = (message: string, color: string = 'success') => {
+  snackbar.value = {
+    show: true,
+    message,
+    color,
+  }
+}
 // Fetch programs from Directus
 const fetchPrograms = async () => {
   isLoading.value = true
@@ -138,6 +151,7 @@ const saveProgram = async () => {
           programName: form.value.programName,
         },
       })
+      showMessage('Program updated successfully')
     }
     else {
       // Create new program
@@ -148,6 +162,7 @@ const saveProgram = async () => {
           programName: form.value.programName,
         },
       })
+      showMessage('Program created successfully')
     }
 
     isDialogOpen.value = false
@@ -155,6 +170,7 @@ const saveProgram = async () => {
   }
   catch (error) {
     console.error('Failed to save program:', error)
+    showMessage('Failed to save program.', 'error')
   }
 }
 
@@ -420,5 +436,23 @@ onMounted(() => {
         </VCardActions>
       </VCard>
     </VDialog>
+
+    <VSnackbar
+      v-model="snackbar.show"
+      :color="snackbar.color"
+      :timeout="3000"
+      location="top end"
+    >
+      {{ snackbar.message }}
+
+      <template #actions>
+        <VBtn
+          icon="ri-close-line"
+          variant="text"
+          density="comfortable"
+          @click="snackbar.show = false"
+        />
+      </template>
+    </VSnackbar>
   </div>
 </template>

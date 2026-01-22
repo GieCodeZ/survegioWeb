@@ -56,7 +56,8 @@ const relatedStudents = ref<any[]>([])
 const form = ref({
   id: undefined as number | undefined,
   name: null as number | null,
-  teacher_id: [] as number[],
+  dean_id: null as number | null, // Track dean specifically
+  teacher_id: [] as number[],    // Track other teachers
 })
 
 const search = ref('')
@@ -72,6 +73,20 @@ const headers = [
   { title: 'No. of Classes', key: 'classCount', sortable: true, align: 'center' as const },
   { title: 'Actions', key: 'actions', sortable: false, align: 'center' as const },
 ]
+
+const snackbar = ref({
+  show: false,
+  message: '',
+  color: 'success', 
+})
+
+const showMessage = (message: string, color: string = 'success') => {
+  snackbar.value = {
+    show: true,
+    message,
+    color,
+  }
+}
 
 // Get department name from relationship
 const getDepartmentName = (department: Department | null) => {
@@ -270,36 +285,17 @@ const openEditDialog = (department: Department) => {
   isEditing.value = true
 
   // Extract name as number
-  const nameId = typeof department.name === 'object' && department.name !== null
-    ? department.name.id
-    : department.name
+  const nameId = typeof department.name === 'object' ? department.name.id : department.name
 
-  // Extract teacher_ids as numbers - handle junction table structure
-  const teacherIds: number[] = []
-  if (department.teacher_id && Array.isArray(department.teacher_id)) {
-    for (const item of department.teacher_id) {
-      if (typeof item === 'number') {
-        teacherIds.push(item)
-      }
-      else if (typeof item === 'object' && item !== null) {
-        // Junction table structure: { id, Teachers_id } or direct teacher { id, first_name, ... }
-        if (item.Teachers_id) {
-          // Junction table - get the actual teacher ID
-          const tid = typeof item.Teachers_id === 'object' ? item.Teachers_id.id : item.Teachers_id
-          if (tid) teacherIds.push(tid)
-        }
-        else if (item.first_name) {
-          // Direct teacher object
-          teacherIds.push(item.id)
-        }
-      }
-    }
-  }
+  const allTeachers = getTeachers(department)
+  const dean = allTeachers.find(t => t.position?.toLowerCase() === 'dean')
+  const others = allTeachers.filter(t => t.id !== dean?.id)
 
   form.value = {
     id: department.id,
     name: nameId,
-    teacher_id: teacherIds,
+    dean_id: dean ? dean.id : null,
+    teacher_id: others.map(t => t.id),
   }
 
   isDialogOpen.value = true
@@ -382,6 +378,7 @@ const saveDepartment = async () => {
         method: 'PATCH',
         body,
       })
+      showMessage('Department updated successfully')
     }
     else {
       // Create new department
@@ -389,6 +386,7 @@ const saveDepartment = async () => {
         method: 'POST',
         body,
       })
+      showMessage('Department created successfully')
     }
 
     isDialogOpen.value = false
@@ -396,6 +394,7 @@ const saveDepartment = async () => {
   }
   catch (error) {
     console.error('Failed to save department:', error)
+    showMessage('Failed to save department.', 'error')
   }
 }
 
@@ -565,17 +564,15 @@ onMounted(() => {
             </VCol>
             <VCol cols="12">
               <VAutocomplete
-                v-model="form.teacher_id"
-                label="Assign Teachers"
-                :items="availableTeachers"
+                v-model="form.dean_id"
+                label="Assign Program Dean"
+                :items="availableTeachers.filter(t => t.position?.toLowerCase() === 'dean')"
                 :item-title="(item: Teacher) => getTeacherFullName(item)"
                 item-value="id"
                 variant="outlined"
-                multiple
-                chips
-                closable-chips
-                placeholder="Type to search teachers..."
-                no-data-text="No teachers found"
+                :rules="[v => !!v || 'Dean is required']"
+                placeholder="Select a Dean"
+                no-data-text="No deans found"
                 hint="Deans already assigned to other departments are not shown"
                 persistent-hint
               >
@@ -592,8 +589,33 @@ onMounted(() => {
                         Dean
                       </VChip>
                     </template>
+                  </VListItem>
+                </template>
+              </VAutocomplete>
+            </VCol>
+            <VCol cols="12">
+              <VAutocomplete
+                v-model="form.teacher_id"
+                label="Assign Teachers"
+                :items="availableTeachers.filter(t => t.position?.toLowerCase() === 'professor')"
+                :item-title="(item: Teacher) => getTeacherFullName(item)"
+                item-value="id"
+                variant="outlined"
+                :rules="[v => !!v || 'Professor is required']"
+                multiple
+                chips
+                closable-chips
+                placeholder="Type to search teachers..."
+                no-data-text="No teachers found"
+                persistent-hint
+              >
+                <template #item="{ item, props }">
+                  <VListItem v-bind="props">
+                    <template #title>
+                      {{ getTeacherFullName(item.raw) }}
+                    </template>
                     <template #subtitle>
-                      {{ item.raw.position }} • {{ item.raw.email }}
+                      {{ item.raw.position }}
                     </template>
                   </VListItem>
                 </template>
@@ -750,6 +772,23 @@ onMounted(() => {
         </VCardActions>
       </VCard>
     </VDialog>
+    <VSnackbar
+      v-model="snackbar.show"
+      :color="snackbar.color"
+      :timeout="3000"
+      location="top end"
+    >
+      {{ snackbar.message }}
+
+      <template #actions>
+        <VBtn
+          icon="ri-close-line"
+          variant="text"
+          density="comfortable"
+          @click="snackbar.show = false"
+        />
+      </template>
+    </VSnackbar>
   </div>
 </template>
 
